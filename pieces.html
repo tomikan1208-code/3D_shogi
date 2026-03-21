@@ -1,0 +1,424 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>駒の動き – 三次元将棋</title>
+  <meta name="description" content="三次元将棋の全駒種の動きを3Dで確認できる展示ページ">
+  <link rel="stylesheet" href="css/style.css">
+  <style>
+    :root {
+      --bg: #12161f;
+      --card-bg: #1a1f2e;
+      --card-border: #2e3a50;
+      --accent: #5a9af5;
+      --text: #c8d4e8;
+      --sub: #7a8aa0;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: var(--bg); color: var(--text); font-family: 'Segoe UI', sans-serif; height: 100vh; overflow: hidden; }
+
+    /* ヘッダー */
+    .piece-header {
+      display: flex; align-items: center; gap: 16px;
+      padding: 12px 20px;
+      background: rgba(26,31,46,0.95);
+      border-bottom: 1px solid var(--card-border);
+      position: fixed; top: 0; left: 0; right: 0; z-index: 10;
+    }
+    .piece-header h1 { font-size: 1.1rem; font-weight: 700; color: var(--accent); flex: 1; }
+    .back-btn {
+      background: none; border: 1px solid var(--card-border);
+      color: var(--text); padding: 6px 14px; border-radius: 6px;
+      cursor: pointer; font-size: 0.85rem; transition: all .18s;
+    }
+    .back-btn:hover { background: var(--card-border); }
+
+    /* タグフィルター */
+    .filter-bar {
+      position: fixed; top: 49px; left: 0; right: 0; z-index: 9;
+      background: rgba(18,22,31,0.97);
+      display: flex; gap: 8px; padding: 8px 20px;
+      border-bottom: 1px solid #1e2638;
+      overflow-x: auto;
+    }
+    .filter-bar::-webkit-scrollbar { display: none; }
+    .tag-btn {
+      flex-shrink: 0;
+      padding: 4px 12px; border-radius: 20px;
+      border: 1px solid var(--card-border);
+      background: none; color: var(--sub);
+      cursor: pointer; font-size: 0.78rem; transition: all .15s;
+    }
+    .tag-btn.active, .tag-btn:hover {
+      background: var(--accent); border-color: var(--accent); color: #fff;
+    }
+
+    /* ギャラリー（横スクロール） */
+    .gallery-wrap {
+      position: fixed; top: 100px; left: 0; right: 0; bottom: 0;
+      overflow-x: auto; overflow-y: hidden;
+      display: flex; align-items: center;
+      padding: 20px 32px;
+      gap: 20px;
+      scroll-snap-type: x mandatory;
+    }
+    .gallery-wrap::-webkit-scrollbar { height: 6px; }
+    .gallery-wrap::-webkit-scrollbar-track { background: #1a1f2e; }
+    .gallery-wrap::-webkit-scrollbar-thumb { background: #3a4a60; border-radius: 3px; }
+
+    /* カード */
+    .piece-card {
+      flex-shrink: 0;
+      width: 280px; height: 360px;
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 14px;
+      display: flex; flex-direction: column;
+      scroll-snap-align: center;
+      transition: transform .2s, border-color .2s, box-shadow .2s;
+      overflow: hidden;
+      cursor: pointer;
+    }
+    .piece-card:hover {
+      transform: translateY(-6px) scale(1.02);
+      border-color: var(--accent);
+      box-shadow: 0 8px 32px rgba(90,154,245,0.18);
+    }
+    .piece-card .canvas-wrap {
+      flex: 1; position: relative; background: #0e1220;
+    }
+    .piece-card canvas { width: 100% !important; height: 100% !important; }
+    .piece-card .info {
+      padding: 10px 14px 12px;
+      border-top: 1px solid var(--card-border);
+    }
+    .piece-card .info h2 {
+      font-size: 1rem; font-weight: 700;
+      color: var(--text); margin-bottom: 3px;
+    }
+    .piece-card .info p {
+      font-size: 0.72rem; color: var(--sub); line-height: 1.4;
+    }
+    .promoted-badge {
+      display: inline-block; background: #882200; color: #ffa0a0;
+      font-size: 0.65rem; padding: 1px 6px; border-radius: 10px;
+      margin-left: 6px; vertical-align: middle;
+    }
+    .move-count {
+      display: inline-block; background: rgba(90,154,245,0.15);
+      color: var(--accent); font-size: 0.68rem;
+      padding: 1px 7px; border-radius: 10px; margin-top: 4px;
+    }
+  </style>
+
+  <!-- Three.js importmap -->
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+      "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+    }
+  }
+  </script>
+</head>
+<body>
+
+<div class="piece-header">
+  <button class="back-btn" onclick="location.href='index.html'">← 戻る</button>
+  <h1>📖 駒の動き – 三次元将棋</h1>
+</div>
+
+<div class="filter-bar" id="filter-bar"></div>
+
+<div class="gallery-wrap" id="gallery"></div>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { PieceType, Player, getDisplayName, isPromotedType, getPieceGrade } from './js/board.js';
+import { getLegalMoves } from './js/pieces.js';
+import { Board } from './js/board.js';
+
+// ==============================================================
+// 駒カタログ
+// gridSize: 9x9x9 大駒の場合 9。他は 5。
+// ==============================================================
+const CATALOG = [
+  { type: PieceType.OU,       name: '王将 / 玉将', tag: '王',   desc: '全方位1マスずつ移動可能（26方向）', gridSize: 5 },
+  { type: PieceType.HI,       name: '飛車',        tag: '大駒', desc: '6軸方向に何マスでも直進', gridSize: 9 },
+  { type: PieceType.RYU,      name: '竜王（成飛）', tag: '成り', desc: '飛車の動き ＋ 隣接1マスの26方向', promoted: true, gridSize: 9 },
+  { type: PieceType.KAKU,     name: '角行',         tag: '大駒', desc: '12方向斜めに何マスでも移動', gridSize: 9 },
+  { type: PieceType.UMA,      name: '竜馬（成角）', tag: '成り', desc: '角の動き ＋ 隣接1マスの26方向', promoted: true, gridSize: 9 },
+  { type: PieceType.KIN,      name: '金将',         tag: '金系', desc: '前方9マス ＋ 同面8マス ＋ 真後ろ1マス', gridSize: 5 },
+  { type: PieceType.GIN,      name: '銀将',         tag: '銀',   desc: '前方全9マス ＋ 後方の角8マス', gridSize: 5 },
+  { type: PieceType.NARI_GIN, name: '成銀',         tag: '成り', desc: '金将と同じ動き', promoted: true, gridSize: 5 },
+  { type: PieceType.KEI,      name: '桂馬',         tag: '桂',   desc: 'y+2, x±1, z±1 の4マス（跳び越え可）', gridSize: 5 },
+  { type: PieceType.NARI_KEI, name: '成桂',         tag: '成り', desc: '金将と同じ動き', promoted: true, gridSize: 5 },
+  { type: PieceType.KYO,      name: '香車',         tag: '香',   desc: '前方（+y）のみ何マスでも直進', gridSize: 9 },
+  { type: PieceType.NARI_KYO, name: '成香',         tag: '成り', desc: '金将と同じ動き', promoted: true, gridSize: 5 },
+  { type: PieceType.FU,       name: '歩兵',         tag: '歩',   desc: '前方+y に1マスのみ移動', gridSize: 5 },
+  { type: PieceType.NARI_FU,  name: 'と金（成歩）', tag: '成り', desc: '金将と同じ動き', promoted: true, gridSize: 5 },
+];
+
+const ALL_TAGS = ['すべて', ...new Set(CATALOG.map(c => c.tag))];
+
+// ==============================================================
+// ミニ盤面設定
+// ==============================================================
+const MINI_CELL = 0.72;
+
+function getOffset(size) { return (size - 1) / 2 * MINI_CELL; }
+function toMW(i, size) { return i * MINI_CELL - getOffset(size); }
+function toMWX(i, size) { return getOffset(size) - i * MINI_CELL; }
+
+const COL_PIECE   = 0xdec88a;
+const COL_MOVE    = 0x4499ff;
+const COL_GRID    = 0x2e3a50;
+
+// 将棋駒ジオメトリ
+const PIECE_GEO_CACHE = {};
+function getMiniPieceGeo(grade) {
+  if (PIECE_GEO_CACHE[grade]) return PIECE_GEO_CACHE[grade];
+  const s  = MINI_CELL * (0.68 + grade * 0.08);
+  // 正方形ではなく、少し平べったい（厚みが少ない）実際の将棋駒に近い比率に
+  // bw=横幅, bd=厚み, tw=先端横幅, td=先端厚み
+  const bw = s * 0.45, bd = s * 0.18;
+  const tw = s * 0.32, td = s * 0.12;
+  // h1=台形部分の高さ（長くする）、h2=全体の高さ（先っぽだけ斜め）
+  const h1 = s * 0.44, h2 = s * 0.52;
+
+  const verts = new Float32Array([
+    -bw, 0, -bd,   bw, 0, -bd,   bw, 0,  bd,  -bw, 0,  bd,
+    -tw, h1,-td,   tw, h1,-td,   tw, h1, td,  -tw, h1, td,
+     0,  h2,  0,
+  ]);
+  const idx = [
+    // 底面 (インデックス順序を逆にして法線を下向き・外側にする)
+    0,1,2, 0,2,3,
+    3,2,6, 3,6,7,  7,6,8,
+    1,0,4, 1,4,5,  5,4,8,
+    0,3,7, 0,7,4,  4,7,8,
+    2,1,5, 2,5,6,  6,5,8,
+  ];
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(verts, 3));
+  geo.setIndex(idx);
+  geo.computeVertexNormals();
+  geo.rotateX(Math.PI / 2); // 先手を向かせる
+  geo.translate(0, 0, -h2 * 0.5); // 中心へ
+  PIECE_GEO_CACHE[grade] = geo;
+  return geo;
+}
+
+// 駒文字テクスチャ（背景透明）
+function makeMiniTex(cell) {
+  const name     = getDisplayName(cell);
+  const promoted = isPromotedType(cell.type);
+  const c = document.createElement('canvas');
+  c.width = 64; c.height = 64;
+  const ctx = c.getContext('2d');
+  ctx.clearRect(0, 0, 64, 64);
+  
+  ctx.fillStyle = promoted ? '#cc2200' : '#1a0800';
+  ctx.shadowBlur = 0; // 影を消す
+  
+  ctx.font = `bold ${name.length > 1 ? 26 : 36}px serif`;
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText(name, 32, 34);
+  return new THREE.CanvasTexture(c);
+}
+
+// ミニグリッド描画
+function buildMiniGrid(scene, size) {
+  const mat  = new THREE.LineBasicMaterial({ color: COL_GRID, transparent: true, opacity: 0.25, depthWrite: false });
+  const ofs  = getOffset(size);
+  const gMin = -ofs - MINI_CELL * 0.5;
+  const gMax =  ofs + MINI_CELL * 0.5;
+  const lp   = (j) => (j - 0.5) * MINI_CELL - ofs;
+
+  for (let a = 0; a <= size; a++) {
+    const pa = lp(a);
+    for (let b = 0; b <= size; b++) {
+      const pb = lp(b);
+      const add = (pts) => scene.add(new THREE.Line(
+        new THREE.BufferGeometry().setFromPoints(pts), mat));
+      add([new THREE.Vector3(gMin, pa, pb), new THREE.Vector3(gMax, pa, pb)]);
+      add([new THREE.Vector3(pa, gMin, pb), new THREE.Vector3(pa, gMax, pb)]);
+      add([new THREE.Vector3(pa, pb, gMin), new THREE.Vector3(pa, pb, gMax)]);
+    }
+  }
+}
+
+// 移動マーカー（半透明の青いボックス）
+function buildMoveMarkers(scene, moves, size) {
+  const mat = new THREE.MeshBasicMaterial({ color: COL_MOVE, transparent: true, opacity: 0.40, depthWrite: false });
+  // 表示範囲は 0 〜 size-1 にクロップする
+  const marginL = Math.floor((9 - size) / 2); // 盤面全体の中心(4,4,4)からのズレ。9のときは0, 5のときは2。
+  const marginH = 8 - marginL;
+
+  let visCount = 0;
+  for (const [bx, by, bz] of moves) {
+    if (bx < marginL || bx > marginH || by < marginL || by > marginH || bz < marginL || bz > marginH) continue;
+    
+    // 表示座標に直す (0..size-1)
+    const px = bx - marginL;
+    const py = by - marginL;
+    const pz = bz - marginL;
+    
+    const m = new THREE.Mesh(new THREE.BoxGeometry(MINI_CELL, MINI_CELL, MINI_CELL), mat);
+    m.position.set(toMWX(px, size), toMW(pz, size), toMW(py, size));
+    scene.add(m);
+    visCount++;
+  }
+  return visCount;
+}
+
+// 1枚のカードに Three.js シーンを構築
+function buildCard(entry) {
+  const { type, name, desc, promoted, gridSize } = entry;
+
+  // --- DOM ---
+  const card = document.createElement('div');
+  card.className = 'piece-card';
+  card.dataset.tag = entry.tag;
+
+  const wrap = document.createElement('div');
+  wrap.className = 'canvas-wrap';
+  card.appendChild(wrap);
+
+  const info = document.createElement('div');
+  info.className = 'info';
+  card.appendChild(info);
+
+  const h2 = document.createElement('h2');
+  h2.textContent = name;
+  if (promoted) {
+    const badge = document.createElement('span');
+    badge.className = 'promoted-badge'; badge.textContent = '成り';
+    h2.appendChild(badge);
+  }
+  info.appendChild(h2);
+
+  const p = document.createElement('p');
+  p.textContent = desc;
+  info.appendChild(p);
+
+  // --- Three.js ---
+  const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+  renderer.setPixelRatio(window.devicePixelRatio);
+  renderer.setSize(280, 220);
+  wrap.appendChild(renderer.domElement);
+
+  const scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x0e1220);
+
+  const camera = new THREE.PerspectiveCamera(45, 280 / 220, 0.1, 100);
+  // gridSize=9 の場合はカメラを引く
+  const camDist = gridSize === 9 ? 9.5 : 5.8;
+  camera.position.set(-camDist*0.6, camDist*0.7, camDist*0.9);
+  camera.lookAt(0, 0, 0);
+
+  const controls = new OrbitControls(camera, renderer.domElement);
+  controls.enableDamping = true; controls.dampingFactor = 0.06;
+  controls.enableZoom = false; controls.autoRotate = true;
+  controls.autoRotateSpeed = 0.8;
+
+  scene.add(new THREE.AmbientLight(0xffffff, 0.65));
+  const dir = new THREE.DirectionalLight(0xffffff, 0.9);
+  dir.position.set(-3, 6, 4); scene.add(dir);
+
+  buildMiniGrid(scene, gridSize);
+
+  // ガチ盤面(9x9x9)上で駒の移動を計算 (4,4,4)が中心
+  const board = new Board(); // Array is initialized to 9x9x9
+  const cell = { type, player: Player.SENTE };
+  const CX = 4; 
+  board.set(CX, CX, CX, { ...cell, id: 1, promoted: false });
+
+  // 移動可能マス計算
+  const moves = getLegalMoves(board, CX, CX, CX);
+
+  // 描画 (表示サイズ gridSize 用のマーカー)
+  const visCount = buildMoveMarkers(scene, moves, gridSize);
+
+  // 移動マス数バッジ
+  const cnt = document.createElement('span');
+  cnt.className = 'move-count';
+  cnt.textContent = `表示範囲 ${gridSize}x${gridSize}x${gridSize} 内: ${visCount} マス`;
+  info.appendChild(cnt);
+
+  // 駒メッシュ
+  const grade = getPieceGrade(type);
+  const geo   = getMiniPieceGeo(Math.min(grade, 4));
+  // flatShading: true で丸みを消してエッジをキリッとさせる
+  const mat   = new THREE.MeshPhongMaterial({ color: COL_PIECE, shininess: 30, flatShading: true });
+  const body  = new THREE.Mesh(geo, mat);
+  
+  // 中心座標 (0,0,0) は getOffset 等によって中央になるので、
+  // board.cx = 4 -> offset後のローカル座標の index
+  const localCX = (gridSize - 1) / 2;
+  body.position.set(toMWX(localCX, gridSize), toMW(localCX, gridSize), toMW(localCX, gridSize));
+  scene.add(body);
+
+  // スプライト（駒名）
+  const tex    = makeMiniTex({ type, player: Player.SENTE });
+  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: false }));
+  // y座標を +0.14 から +0.22 に上げて駒に埋もれないようにする
+  sprite.position.set(toMWX(localCX, gridSize), toMW(localCX, gridSize) + 0.22, toMW(localCX, gridSize));
+  sprite.scale.set(0.42, 0.42, 0.42);
+  scene.add(sprite);
+
+  // アニメーションループ
+  let alive = true;
+  const loop = () => {
+    if (!alive) return;
+    requestAnimationFrame(loop);
+    controls.update();
+    renderer.render(scene, camera);
+  };
+  loop();
+
+  const observer = new IntersectionObserver((entries) => {
+    entries.forEach(e => { controls.autoRotate = e.isIntersecting; });
+  }, { root: document.getElementById('gallery'), threshold: 0.1 });
+  observer.observe(card);
+
+  return { card, renderer, alive };
+}
+
+// ==============================================================
+// メイン
+// ==============================================================
+const gallery = document.getElementById('gallery');
+const filterBar = document.getElementById('filter-bar');
+let activeTag = 'すべて';
+
+ALL_TAGS.forEach(tag => {
+  const btn = document.createElement('button');
+  btn.className = 'tag-btn' + (tag === activeTag ? ' active' : '');
+  btn.textContent = tag;
+  btn.onclick = () => {
+    activeTag = tag;
+    document.querySelectorAll('.tag-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    document.querySelectorAll('.piece-card').forEach(c => {
+      c.style.display = (tag === 'すべて' || c.dataset.tag === tag) ? '' : 'none';
+    });
+  };
+  filterBar.appendChild(btn);
+});
+
+CATALOG.forEach(entry => {
+  const { card } = buildCard(entry);
+  gallery.appendChild(card);
+});
+
+document.addEventListener('keydown', e => {
+  const step = 300;
+  if (e.key === 'ArrowRight') gallery.scrollLeft += step;
+  if (e.key === 'ArrowLeft')  gallery.scrollLeft -= step;
+});
+</script>
+</body>
+</html>

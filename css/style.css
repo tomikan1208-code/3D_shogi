@@ -1,0 +1,781 @@
+/* style.css - 三次元将棋 */
+
+@import url('https://fonts.googleapis.com/css2?family=Noto+Serif+JP:wght@400;700&family=Inter:wght@300;400;600&display=swap');
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg-deep:    #0d1117;
+  --bg-panel:   #161b26;
+  --bg-card:    #1e2536;
+  --border:     #2d3550;
+  --text:       #d0d8e8;
+  --text-sub:   #7a8aab;
+  --accent:     #4a90d9;
+  --accent2:    #f5c842;
+  --sente:      #e8d5a3;
+  --gote:       #5a7a9c;
+  --red:        #e85555;
+  --green:      #44cc66;
+}
+
+body {
+  font-family: 'Inter', 'Noto Serif JP', sans-serif;
+  background: var(--bg-deep);
+  color: var(--text);
+  height: 100vh;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ============================================================
+   モード選択画面 (index.html)
+   ============================================================ */
+.mode-select-screen {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100vh;
+  gap: 32px;
+  background: radial-gradient(ellipse at 50% 30%, #1a2540 0%, #0d1117 70%);
+}
+.mode-select-screen h1 {
+  font-family: 'Noto Serif JP', serif;
+  font-size: 2.8rem;
+  letter-spacing: 0.15em;
+  background: linear-gradient(135deg, #d4a850, #f0e0a0, #c8902a);
+  -webkit-background-clip: text;
+  background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  text-shadow: none;
+}
+.mode-select-screen h1 span { font-size: 0.8em; vertical-align: middle; margin-right: 0.3em; }
+.mode-subtitle { font-size: 1rem; color: var(--text-sub); letter-spacing: 0.1em; }
+
+.mode-buttons {
+  display: flex;
+  gap: 20px;
+  flex-wrap: wrap;
+  justify-content: center;
+  margin-top: 16px;
+}
+.mode-btn {
+  position: relative;
+  padding: 20px 40px;
+  border: 1.5px solid var(--border);
+  border-radius: 12px;
+  background: var(--bg-card);
+  color: var(--text);
+  font-size: 1.1rem;
+  font-family: 'Noto Serif JP', serif;
+  cursor: pointer;
+  transition: all 0.25s ease;
+  overflow: hidden;
+  min-width: 180px;
+}
+.mode-btn::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(135deg, rgba(74,144,217,0.15), rgba(74,144,217,0));
+  opacity: 0;
+  transition: opacity 0.25s;
+}
+.mode-btn:hover:not(:disabled)::before { opacity: 1; }
+.mode-btn:hover:not(:disabled) {
+  border-color: var(--accent);
+  transform: translateY(-3px);
+  box-shadow: 0 8px 24px rgba(74,144,217,0.2);
+}
+.mode-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.mode-btn .icon { display: block; font-size: 2rem; margin-bottom: 6px; }
+.mode-btn .soon {
+  position: absolute;
+  top: 8px; right: 10px;
+  font-size: 0.65rem;
+  background: rgba(255,255,255,0.1);
+  border-radius: 4px;
+  padding: 1px 5px;
+  color: var(--text-sub);
+}
+.mode-btn .new-tag {
+  position: absolute;
+  top: 8px; right: 10px;
+  font-size: 0.6rem;
+  background: var(--accent);
+  color: #fff;
+  border-radius: 4px;
+  padding: 1px 6px;
+  font-weight: 700;
+  animation: pulse 2s infinite;
+}
+
+@keyframes pulse {
+  0% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(1.1); opacity: 0.8; }
+  100% { transform: scale(1); opacity: 1; }
+}
+
+/* ゲーム画面レイアウト (game.html) */
+.game-screen, #game-screen {
+  display: flex !important;
+  flex-direction: column;
+  height: 100vh;
+  width: 100vw;
+  overflow: hidden;
+}
+
+#game-screen.hidden {
+  display: none !important;
+}
+
+/* ヘッダー */
+.game-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 16px;
+  background: var(--bg-panel);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+  gap: 12px;
+}
+.header-left { display: flex; align-items: center; gap: 16px; }
+
+.back-link {
+  text-decoration: none;
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 6px 14px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 0.85rem;
+  transition: all .18s;
+  display: inline-flex;
+  align-items: center;
+}
+.back-link:hover {
+  background: var(--border);
+  color: #fff;
+}
+
+.header-title {
+  font-family: 'Noto Serif JP', serif;
+  font-size: 1.1rem;
+  background: linear-gradient(90deg, #d4a850, #f0e0a0);
+  -webkit-background-clip: text;
+  background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+/* 中央ビュー切り替えボタン */
+.header-center {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 0;
+}
+.view-toggle-btn {
+  padding: 6px 22px;
+  background: var(--bg-card);
+  border: 1.5px solid var(--border);
+  color: var(--text-sub);
+  font-size: 0.85rem;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.view-toggle-btn:first-child { border-radius: 8px 0 0 8px; }
+.view-toggle-btn:last-child { border-radius: 0 8px 8px 0; }
+.view-toggle-btn.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+  font-weight: 600;
+}
+
+/* スタートボタン */
+.btn-start {
+  padding: 7px 20px;
+  background: var(--accent2);
+  color: #1a0e00;
+  border: none;
+  border-radius: 8px;
+  font-weight: 700;
+  font-size: 0.9rem;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.btn-start:hover { opacity: 0.88; transform: scale(1.03); }
+
+/* ターン表示 */
+.turn-display {
+  font-size: 0.95rem;
+  font-weight: 600;
+  min-width: 80px;
+  text-align: right;
+}
+.turn-display .sente { color: var(--sente); }
+.turn-display .gote { color: var(--gote); }
+.phase-display {
+  font-size: 0.78rem;
+  color: var(--text-sub);
+  text-align: right;
+}
+
+/* メインエリア */
+.game-main {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+  gap: 0;
+}
+
+/* キャンバスコンテナ */
+.canvas-area {
+  flex: 1;
+  position: relative;
+  overflow: hidden;
+  background: #12161f;
+  display: flex; /* 追加: 2D/3Dの制御をしやすくするため */
+  flex-direction: column;
+}
+#container-3d { width: 100%; height: 100%; flex: 1; }
+#wrapper-2d { 
+  width: 100%; 
+  height: 100%; 
+  flex: 1;
+  overflow-y: auto !important; 
+  padding: 20px 0; /* 上下の余白 */
+}
+
+/* サイドパネル */
+.side-panel {
+  width: 240px;
+  background: var(--bg-panel);
+  border-left: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  flex-shrink: 0;
+  height: 100%;
+}
+.panel-section {
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border);
+}
+.panel-section h3 {
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--text-sub);
+  margin-bottom: 10px;
+}
+
+/* 断面コントロール */
+#panel-slice { display: none; }
+#panel-slice.active { display: block; }
+.slice-btns { display: flex; gap: 4px; margin-bottom: 10px; }
+.slice-btn {
+  flex: 1;
+  padding: 5px 0;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text-sub);
+  font-size: 0.8rem;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.slice-btn.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+  font-weight: 600;
+}
+.slice-label {
+  font-size: 0.8rem;
+  color: var(--text);
+  margin-bottom: 6px;
+}
+input[type=range] {
+  width: 100%;
+  accent-color: var(--accent);
+}
+
+/* 透明度 */
+.transparency-row { display: flex; flex-direction: column; gap: 6px; }
+.transparency-row label { font-size: 0.8rem; color: var(--text-sub); }
+
+/* 手持ち */
+#panel-hand { display: none; }
+#panel-hand.active { display: block; }
+.hand-row {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px 8px;
+  justify-items: center;
+  padding: 10px 4px;
+}
+/* 駒のボタン自体 */
+.hand-btn {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  /* Grade 4 (玉) を最大サイズ 50x52 とする */
+  width: 50px;
+  height: 52px;
+  background: #cbae70; /* 無効時ベース（暗め） */
+  color: #1a0e00;
+  border: none;
+  cursor: pointer;
+  font-size: 1.15rem;
+  font-weight: 700;
+  font-family: 'Noto Serif JP', serif;
+  user-select: none;
+  transition: all 0.2s;
+  /* 2Dビューの Grade 4 (King) と完全に同じ比率の clip-path */
+  clip-path: polygon(50% 0%, 85.7% 20.4%, 99% 100%, 1% 100%, 14.3% 20.4%);
+  padding: 0;
+  margin: 0;
+  transform-origin: bottom center;
+}
+
+/* グレード別のスケーリング (大駒を大きく) - 2Dのsc値を反映 */
+.hand-btn.grade-4 { transform: scale(1.0); }
+.hand-btn.grade-3 { transform: scale(0.92); } /* 角・飛 */
+.hand-btn.grade-2 { transform: scale(0.84); } /* 金・銀 */
+.hand-btn.grade-1 { transform: scale(0.76); } /* 香・桂 */
+.hand-btn.grade-0 { transform: scale(0.68); } /* 歩 */
+
+/* 有効な場合 - 2D 先手玉の配色に統一 (#e8d5a3, #2a1000) */
+.hand-btn.sente:not(.empty) {
+  background: var(--sente) !important;
+  color: #2a1000;
+  box-shadow: inset 0 -3px 0 rgba(0,0,0,0.1);
+  opacity: 1;
+  filter: none;
+}
+.hand-btn.gote:not(.empty) {
+  background: var(--gote) !important;
+  color: #fff;
+  box-shadow: inset 0 -3px 0 rgba(0,0,0,0.1);
+  opacity: 1;
+  filter: none;
+}
+
+.hand-btn:hover:not(:disabled):not(.empty) {
+  filter: brightness(1.1);
+  z-index: 10;
+}
+.hand-btn.active {
+  background: #f5c842 !important; /* accent2 */
+  color: #1a0e00 !important;
+  box-shadow: 0 0 15px rgba(245, 200, 66, 0.7);
+  z-index: 10;
+  opacity: 1 !important;
+  filter: none !important;
+}
+.hand-btn.empty, .hand-btn:disabled {
+  opacity: 0.25;
+  filter: grayscale(1.0) brightness(0.7);
+  cursor: default;
+}
+.hand-btn .name {
+  margin-top: 4px; /* 五角形の先端を避ける */
+}
+/* 数量バッジ - hand-item に対して絶対配置 */
+.hand-item {
+  position: relative;
+  width: 50px;
+  height: 52px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.hand-item .count {
+  position: absolute;
+  right: -6px;
+  bottom: -4px;
+  background: var(--bg-deep);
+  color: var(--accent2);
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  font-size: 0.75rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1.5px solid var(--accent2);
+  font-weight: 800;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.7);
+  z-index: 10;
+  pointer-events: none;
+}
+
+.hand-hint {
+  margin-top: 16px;
+  font-size: 0.72rem;
+  color: var(--text-sub);
+  line-height: 1.35;
+  text-align: center;
+}
+
+/* 棋譜ログ */
+.log-area { flex: 1; overflow-y: auto; }
+#log-list {
+  list-style: none;
+  font-size: 0.8rem;
+  line-height: 1.9;
+  padding: 0;
+}
+#log-list li { padding: 2px 14px; }
+#log-list li.log-sente { color: var(--sente); }
+#log-list li.log-gote { color: var(--gote); }
+#log-list li:hover { background: rgba(255,255,255,0.04); }
+
+/* パネル順序（2D/3Dで “手持ち” の位置を入れ替える） */
+.side-panel.mode-2d #panel-slice { order: 1; }
+.side-panel.mode-2d #panel-hand  { order: 2; }
+.side-panel.mode-2d #panel-transparency { order: 3; }
+.side-panel.mode-2d .log-area { order: 4; }
+
+.side-panel.mode-3d #panel-slice { order: 1; }
+.side-panel.mode-3d #panel-transparency { order: 2; }
+.side-panel.mode-3d #panel-hand  { order: 3; }
+.side-panel.mode-3d .log-area { order: 4; }
+
+/* ============================================================
+   成りダイアログ
+   ============================================================ */
+.promote-dialog {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.7);
+  z-index: 100;
+  align-items: center;
+  justify-content: center;
+}
+.promote-box {
+  background: var(--bg-card);
+  border: 1.5px solid var(--border);
+  border-radius: 16px;
+  padding: 32px 40px;
+  text-align: center;
+  box-shadow: 0 20px 60px rgba(0,0,0,0.6);
+}
+.promote-box h2 { font-size: 1.3rem; margin-bottom: 8px; }
+.promote-box p { color: var(--text-sub); font-size: 0.9rem; margin-bottom: 24px; }
+.promote-btns { display: flex; gap: 16px; justify-content: center; }
+.btn-promote {
+  padding: 10px 28px;
+  border-radius: 8px;
+  font-size: 1rem;
+  font-weight: 700;
+  cursor: pointer;
+  border: none;
+  transition: all 0.2s;
+}
+.btn-promote.yes { background: var(--green); color: #001a00; }
+.btn-promote.no  { background: var(--bg-panel); color: var(--text); border: 1px solid var(--border); }
+.btn-promote:hover { opacity: 0.85; transform: scale(1.04); }
+
+/* ============================================================
+   ゲームオーバーバナー
+   ============================================================ */
+.game-over-banner {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.75);
+  z-index: 200;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 24px;
+}
+.game-over-banner h2 {
+  font-size: 2.5rem;
+  font-family: 'Noto Serif JP', serif;
+  background: linear-gradient(90deg, #d4a850, #f0e0a0);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+.btn-restart {
+  padding: 12px 40px;
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  border-radius: 10px;
+  font-size: 1.1rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.btn-restart:hover { opacity: 0.85; transform: scale(1.04); }
+
+/* スクロールバー */
+::-webkit-scrollbar { width: 5px; }
+::-webkit-scrollbar-track { background: var(--bg-deep); }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+
+/* ============================================================
+   共通: 画面切り替え & グラスモフィズム
+   ============================================================ */
+.screen {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  transition: opacity 0.5s ease, transform 0.5s ease;
+  z-index: 10;
+}
+.screen.hidden { opacity: 0; pointer-events: none; transform: scale(1.05); }
+.screen.active { opacity: 1; pointer-events: auto; transform: scale(1); }
+
+.glass {
+  background: rgba(22, 27, 38, 0.75);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
+}
+
+/* ============================================================
+   ロビー画面
+   ============================================================ */
+#lobby-screen {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: radial-gradient(circle at center, #1e293b 0%, #0f172a 100%);
+  z-index: 1000;
+}
+
+.lobby-container {
+  width: 90%;
+  max-width: 480px;
+  padding: 48px;
+  border-radius: 24px;
+  text-align: center;
+}
+
+.lobby-container .logo {
+  font-family: 'Noto Serif JP', serif;
+  font-size: 2.5rem;
+  letter-spacing: 0.2em;
+  margin-bottom: 40px;
+  background: linear-gradient(135deg, #f59e0b, #fbbf24);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.lobby-container .badge {
+  font-size: 0.8rem;
+  padding: 4px 10px;
+  border-radius: 6px;
+  border: 1px solid #f59e0b;
+  vertical-align: middle;
+  margin-left: 8px;
+}
+
+.lobby-section {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  animation: fadeIn 0.4s ease-out forwards;
+}
+
+.input-group {
+  display: flex;
+  flex-direction: column;
+  text-align: left;
+  gap: 8px;
+}
+
+.input-group label {
+  font-size: 0.7rem;
+  font-weight: 700;
+  color: var(--text-sub);
+  letter-spacing: 0.15em;
+}
+
+.input-group input {
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 14px 18px;
+  color: #fff;
+  font-size: 1rem;
+  transition: all 0.3s;
+}
+
+.input-group input:focus {
+  outline: none;
+  border-color: var(--accent);
+  background: rgba(255, 255, 255, 0.08);
+  box-shadow: 0 0 0 4px rgba(74, 144, 217, 0.2);
+}
+
+.lobby-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.btn-premium {
+  padding: 16px;
+  border-radius: 14px;
+  font-weight: 700;
+  font-size: 1rem;
+  letter-spacing: 0.05em;
+  cursor: pointer;
+  transition: all 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+  border: none;
+  text-transform: uppercase;
+}
+
+.btn-premium.primary {
+  background: linear-gradient(135deg, #3b82f6, #2563eb);
+  color: #fff;
+  box-shadow: 0 4px 12px rgba(37, 99, 235, 0.3);
+}
+
+.btn-premium.secondary {
+  background: rgba(255, 255, 255, 0.08);
+  color: #fff;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.btn-premium:hover {
+  transform: translateY(-2px);
+  filter: brightness(1.1);
+}
+
+.btn-premium:active {
+  transform: translateY(0);
+}
+
+.divider {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: var(--text-sub);
+  font-size: 0.7rem;
+  font-weight: 600;
+}
+
+.divider::before, .divider::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--border);
+}
+
+/* 待機中 */
+.room-info {
+  margin: 16px 0;
+  padding: 24px;
+  border-radius: 16px;
+}
+
+.room-info .label {
+  font-size: 0.7rem;
+  color: var(--text-sub);
+}
+
+.room-info .code {
+  font-size: 2.5rem;
+  font-weight: 700;
+  letter-spacing: 0.2em;
+  margin-top: 8px;
+  color: var(--accent);
+}
+
+.spinner {
+  width: 40px;
+  height: 40px;
+  margin: 20px auto;
+  border: 3px solid rgba(255,255,255,0.1);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
+
+.status-msg {
+  margin-top: 24px;
+  font-size: 0.85rem;
+  color: var(--accent2);
+}
+
+/* ============================================================
+   ゲーム内オンラインUI
+   ============================================================ */
+.room-pill {
+  background: rgba(255, 255, 255, 0.05);
+  padding: 4px 12px;
+  border-radius: 100px;
+  font-size: 0.75rem;
+  color: var(--text-sub);
+  border: 1px solid var(--border);
+}
+
+.notification {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  background: rgba(0, 0, 0, 0.85);
+  backdrop-filter: blur(8px);
+  padding: 20px 40px;
+  border-radius: 100px;
+  color: #fff;
+  font-weight: 600;
+  z-index: 2000;
+  border: 1px solid var(--accent);
+  box-shadow: 0 0 30px rgba(0, 0, 0, 0.5);
+  animation: notifyIn 0.3s ease-out;
+}
+
+.opponent-hand {
+  order: 0 !important;
+  margin-bottom: 8px;
+}
+
+.my-hand {
+  order: 10 !important;
+  margin-top: auto;
+}
+
+.hand-label {
+  font-size: 0.6rem;
+  color: var(--text-sub);
+  margin-bottom: 8px;
+  opacity: 0.6;
+}
+
+/* アニメーション */
+@keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes spin { to { transform: rotate(360deg); } }
+@keyframes notifyIn { from { opacity: 0; transform: translate(-50%, -40%); } to { opacity: 1; transform: translate(-50%, -50%); } }
+
+.hidden { display: none !important; }
+
+/* 相手の選択状態（紫） */
+.hand-btn.active-opponent {
+  background: #a000ff !important;
+  color: #fff !important;
+  border-color: #d088ff !important;
+  box-shadow: 0 0 15px rgba(160, 0, 255, 0.6) !important;
+  transform: translateY(-2px);
+}

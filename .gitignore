@@ -1,0 +1,26 @@
+# Node.js dependencies
+node_modules/
+
+# Python virtual environments
+.venv/
+venv/
+
+# Python caches
+__pycache__/
+*.py[cod]
+
+# Logs and runtime outputs
+*.log
+logs/
+
+# Build or training artifacts (keep source, ignore generated outputs)
+models/
+ai_training/archive/
+archive/
+
+# Notebook checkpoints
+.ipynb_checkpoints/
+
+# OS/editor files
+.DS_Store
+Thumbs.db

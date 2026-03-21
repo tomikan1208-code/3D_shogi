@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>三次元将棋</title>
+  <link rel="stylesheet" href="css/style.css">
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+      "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+    }
+  }
+  </script>
+</head>
+<body>
+  <div id="main-wrapper">
+    <!-- ゲーム画面 -->
+    <div id="game-screen" class="screen active">
+      <header class="game-header">
+        <div class="header-left">
+          <a href="index.html" class="back-link">← 戻る</a>
+          <span class="header-title">♟ 三次元将棋</span>
+        </div>
+
+        <div class="header-center">
+          <button class="view-toggle-btn active" id="btn-3d-view">3D</button>
+          <button class="view-toggle-btn" id="btn-2d-view">2D</button>
+        </div>
+
+        <div class="header-right">
+          <div class="turn-display" id="turn-info">—</div>
+          <div class="phase-display" id="phase-info">読み込み中...</div>
+        </div>
+      </header>
+
+      <main class="game-main">
+        <div class="canvas-area">
+          <div id="container-3d"></div>
+          <div id="wrapper-2d" class="hidden" style="display:none;width:100%;height:100%;overflow-y:auto;"></div>
+        </div>
+
+        <aside class="side-panel">
+          <!-- 断面コントロール (2D用) -->
+          <div class="panel-section hidden" id="panel-slice">
+            <h3>断面</h3>
+            <div class="slice-btns">
+              <button class="slice-btn active" data-slice="XZ">XZ</button>
+              <button class="slice-btn" data-slice="XY">XY</button>
+              <button class="slice-btn" data-slice="YZ">YZ</button>
+            </div>
+            <div class="slice-label" id="slice-label">y = 五 (5)</div>
+            <input type="range" id="slice-slider" min="0" max="8" value="4" step="1">
+            <div class="zoom-box">
+              <label>表示枚数: <span id="zoom-val">3</span></label>
+              <input type="range" id="zoom-slider" min="1" max="9" value="3" step="1">
+            </div>
+          </div>
+
+          <!-- 手持ち -->
+          <div class="panel-section" id="panel-hand">
+            <h3 class="hand-label">△ 後手の持ち駒</h3>
+            <div class="hand-row" id="hand-row-gote"></div>
+            <h3 class="hand-label">▲ 先手の持ち駒</h3>
+            <div class="hand-row" id="hand-row-sente"></div>
+            <div class="hand-hint" id="hand-hint">駒を選択して盤面をクリック</div>
+          </div>
+
+          <!-- 3D透明度 -->
+          <div class="panel-section" id="panel-transparency">
+            <h3>駒の透明度</h3>
+            <input type="range" id="transparency-slider" min="0.1" max="1.0" step="0.05" value="0.85">
+            <div class="val-display"><span id="transparency-val">85%</span></div>
+          </div>
+
+          <!-- 棋譜ログ -->
+          <div class="panel-section log-area">
+            <h3>棋譜ログ</h3>
+            <ul id="log-list"></ul>
+          </div>
+        </aside>
+      </main>
+    </div>
+  </div>
+
+  <!-- ダイアログ類 -->
+  <div class="promote-dialog hidden" id="promote-dialog">
+    <div class="promote-box glass">
+      <h2>成りますか？</h2>
+      <div class="promote-btns">
+        <button class="btn-premium yes" id="btn-promote">成る</button>
+        <button class="btn-premium no" id="btn-no-promote">不成</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="game-over-banner hidden" id="game-over">
+    <div class="result-box glass">
+      <h2 id="game-over-text">勝負あり！</h2>
+      <button class="btn-premium primary" id="btn-restart">もう一度</button>
+    </div>
+  </div>
+
+  <!-- Scripts -->
+  <script type="module" src="js/ui.js"></script>
+</body>
+</html>
