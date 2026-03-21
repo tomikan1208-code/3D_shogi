@@ -1,0 +1,14 @@
+# Auto-detect text files and normalize to LF in repository.
+* text=auto eol=lf
+
+# Keep Windows batch files with CRLF for compatibility.
+*.bat text eol=crlf
+
+# Binary assets
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.ico binary
+*.ipynb text eol=lf
