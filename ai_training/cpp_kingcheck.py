@@ -31,3 +31,10 @@ def generate_legal_moves(board, owner, hand_counts, player):
         return None
     arr = _cpp.generate_legal_moves_cpp(board, owner, hand_counts, int(player))
     return arr.tolist()
+
+
+def compute_pinned_pieces(board, owner, player, currently_in_check):
+    if _cpp is None:
+        return None
+    arr = _cpp.compute_pinned_pieces_cpp(board, owner, int(player), bool(currently_in_check))
+    return arr.tolist()

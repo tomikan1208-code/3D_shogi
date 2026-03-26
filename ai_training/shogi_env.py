@@ -158,17 +158,29 @@ class Shogi3DEnv(gym.Env):
         super(Shogi3DEnv, self).__init__()
         self.use_cpp_kingcheck = bool(int(os.getenv("SHOGI_USE_CPP_KINGCHECK", "0")))
         self.use_cpp_legal_moves = bool(int(os.getenv("SHOGI_USE_CPP_LEGAL_MOVES", "0")))
+        self.use_cpp_pinned = bool(int(os.getenv("SHOGI_USE_CPP_PINNED", "1")))
+        self.cpp_filter_level = int(os.getenv("SHOGI_CPP_FILTER_LEVEL", "0"))
         self.use_legal_moves_cache = bool(int(os.getenv("SHOGI_USE_LEGAL_MOVES_CACHE", "1")))
         self.cpp_strict_filter = bool(int(os.getenv("SHOGI_CPP_STRICT_FILTER", "0")))
         self.deterministic_move_order = bool(int(os.getenv("SHOGI_DETERMINISTIC_MOVE_ORDER", "0")))
         self.fast_drop_generation = bool(int(os.getenv("SHOGI_FAST_DROP_GENERATION", "1")))
         self.use_fixed_action_space = bool(int(os.getenv("SHOGI_FIXED_ACTION_SPACE", "0")))
+        self.use_uint8_obs = bool(int(os.getenv("SHOGI_USE_UINT8_OBS", "1")))
+        self.enable_tactical_reward = bool(int(os.getenv("SHOGI_TACTICAL_REWARD", "1")))
+        self.hanging_penalty_weight = float(os.getenv("SHOGI_HANGING_PENALTY_WEIGHT", "0.35"))
+        self.free_capture_bonus_weight = float(os.getenv("SHOGI_FREE_CAPTURE_BONUS_WEIGHT", "0.20"))
+        self.free_capture_bonus_cap = float(os.getenv("SHOGI_FREE_CAPTURE_BONUS_CAP", "0.50"))
+        self.hanging_penalty_cap = float(os.getenv("SHOGI_HANGING_PENALTY_CAP", "0.60"))
+        obs_dtype = np.uint8 if self.use_uint8_obs else np.float32
+        board_high = 1 if self.use_uint8_obs else 1.0
+        hand_high = 81 if self.use_uint8_obs else 81.0
+        player_high = 1 if self.use_uint8_obs else 1.0
         # 観測空間: 盤面(3D-CNN) + 持ち駒ベクトル(MLP用)
         self.observation_space = spaces.Dict({
-            "board": spaces.Box(low=0, high=1, shape=(30, 9, 9, 9), dtype=np.float32),
-            "hand_sente": spaces.Box(low=0, high=81, shape=(7,), dtype=np.float32), # FU, KYO, KEI, GIN, KIN, KAKU, HI
-            "hand_gote": spaces.Box(low=0, high=81, shape=(7,), dtype=np.float32),
-            "current_player": spaces.Box(low=0, high=1, shape=(1,), dtype=np.float32)
+            "board": spaces.Box(low=0, high=board_high, shape=(30, 9, 9, 9), dtype=obs_dtype),
+            "hand_sente": spaces.Box(low=0, high=hand_high, shape=(7,), dtype=obs_dtype), # FU, KYO, KEI, GIN, KIN, KAKU, HI
+            "hand_gote": spaces.Box(low=0, high=hand_high, shape=(7,), dtype=obs_dtype),
+            "current_player": spaces.Box(low=0, high=player_high, shape=(1,), dtype=obs_dtype)
         })
         
         # 行動空間のフラット化 (Discrete)
@@ -214,11 +226,13 @@ class Shogi3DEnv(gym.Env):
         self.current_player = Player.SENTE
         self.zobrist_hash = np.uint64(0)
         self.repetition_history_cap = int(os.getenv("SHOGI_REPETITION_HISTORY_CAP", "6000"))
+        self.repetition_truncate_count = int(os.getenv("SHOGI_REPETITION_TRUNCATE_COUNT", "4"))
         self.position_version = 0
         self.legal_moves_cache = {}
         self.legal_action_cache = {}
         self.legal_cache_hits = 0
         self.legal_cache_misses = 0
+        self.game_record_moves = []
         
         self._init_board()
         self._rebuild_all_caches()
@@ -351,6 +365,7 @@ class Shogi3DEnv(gym.Env):
 
     def step(self, action_idx):
         # action_idx は固定ID（推奨）または旧来の合法手インデックス
+        acting_player = self.current_player
         chosen_move = None
         if self.use_fixed_action_space:
             legal_action_map = self._get_legal_action_map(self.current_player)
@@ -358,7 +373,12 @@ class Shogi3DEnv(gym.Env):
                 terminated = True
                 truncated = False
                 in_check = self._is_king_in_check(self.current_player)
-                info = {"reason": "mate" if in_check else "no_legal_moves"}
+                winner = Player.GOTE if self.current_player == Player.SENTE else Player.SENTE
+                info = {
+                    "reason": "mate" if in_check else "no_legal_moves",
+                    "winner": int(winner),
+                    "game_record": list(self.game_record_moves),
+                }
                 reward = -20.0 if in_check else 0.0
                 return self._get_obs(), reward, terminated, truncated, info
             chosen_move = legal_action_map.get(int(action_idx))
@@ -372,7 +392,12 @@ class Shogi3DEnv(gym.Env):
                 terminated = True
                 truncated = False
                 in_check = self._is_king_in_check(self.current_player)
-                info = {"reason": "mate" if in_check else "no_legal_moves"}
+                winner = Player.GOTE if self.current_player == Player.SENTE else Player.SENTE
+                info = {
+                    "reason": "mate" if in_check else "no_legal_moves",
+                    "winner": int(winner),
+                    "game_record": list(self.game_record_moves),
+                }
                 reward = -20.0 if in_check else 0.0
                 return self._get_obs(), reward, terminated, truncated, info
             if action_idx >= len(moves):
@@ -381,6 +406,23 @@ class Shogi3DEnv(gym.Env):
 
         # 合法手の取得
         fx, fy, fz, tx, ty, tz, promote, is_drop, drop_type = chosen_move
+        move_record = {
+            "fx": int(fx),
+            "fy": int(fy),
+            "fz": int(fz),
+            "tx": int(tx),
+            "ty": int(ty),
+            "tz": int(tz),
+            "promote": bool(promote),
+            "is_drop": bool(is_drop),
+            "drop_type": int(drop_type),
+            "player": int(acting_player),
+            "moving_piece": None,
+            "captured_piece": None,
+            "position_hash_after": None,
+            "repetition_count_after": 1,
+        }
+        self.game_record_moves.append(move_record)
         
         # 報酬の基本計算
         reward = 0.0
@@ -391,6 +433,7 @@ class Shogi3DEnv(gym.Env):
         if is_drop:
             # 打ちのロジック
             ptype = DROP_TYPES[drop_type]
+            move_record["moving_piece"] = int(ptype)
 
             self.zobrist_hash ^= _zobrist_value(ptype, self.current_player, tx, ty, tz)
                 
@@ -407,6 +450,9 @@ class Shogi3DEnv(gym.Env):
             target_owner = self.owner[tx, ty, tz]
             moving_ptype_before_move = self.board[fx, fy, fz]
             moving_ptype_after_move = moving_ptype_before_move
+            move_record["moving_piece"] = int(moving_ptype_before_move)
+            if target_owner != Player.NONE:
+                move_record["captured_piece"] = int(target_ptype)
             
             if target_owner != Player.NONE:
                 self.zobrist_hash ^= _zobrist_value(target_ptype, target_owner, tx, ty, tz)
@@ -418,6 +464,7 @@ class Shogi3DEnv(gym.Env):
                     terminated = True
                     info["reason"] = "ou_capture"
                     info["ou_capture_by"] = int(moving_ptype_before_move)
+                    info["winner"] = int(acting_player)
                 
                 # 相手のリストから削除
                 self.piece_positions[target_owner].discard((tx, ty, tz))
@@ -466,6 +513,7 @@ class Shogi3DEnv(gym.Env):
         self.position_version += 1
         self.legal_moves_cache.clear()
         self.legal_action_cache.clear()
+        reward += self._tactical_delta_after_move(acting_player, tx, ty, tz)
 
         # 相手の状態チェック (王手・詰み報酬)
         opp = Player.GOTE if self.current_player == Player.SENTE else Player.SENTE
@@ -476,6 +524,7 @@ class Shogi3DEnv(gym.Env):
                 reward += 20.0 # 詰み勝利報酬
                 terminated = True
                 info["reason"] = "mate"
+                info["winner"] = int(acting_player)
 
         # ターン交代
         self.current_player = opp
@@ -485,10 +534,12 @@ class Shogi3DEnv(gym.Env):
         if self.turn_count >= 1000:
             reward -= 0.001
 
-        # 制限は事実上撤廃 (安全策として5000手までは許可)
-        # 手数制限の修正 (300 -> 5000)
-        if self.turn_count >= 5000:
+        # 制限は事実上撤廃 (安全策として10000手までは許可)
+        # 手数制限の修正 (300 -> 10000)
+        if self.turn_count >= 10000:
             truncated = True
+            info.setdefault("reason", "timeout")
+            info.setdefault("winner", 0)
 
         # --- 千日手（繰り返し）チェック ---
         pos_hash = self._get_pos_hash()
@@ -502,47 +553,98 @@ class Shogi3DEnv(gym.Env):
             else:
                 self.repetition_map[old_hash] = old_cnt - 1
         rep_count = self.repetition_map[pos_hash]
+        move_record["position_hash_after"] = int(pos_hash[0]) if isinstance(pos_hash, tuple) else int(pos_hash)
+        move_record["repetition_count_after"] = int(rep_count)
         
         if rep_count >= 2:
             # 繰り返しが発生したら累積的にペナルティ
             reward -= 0.01 * (rep_count - 1)
         
-        if rep_count >= 20:
-            # 20回繰り返したら打ち切り
+        if rep_count >= self.repetition_truncate_count:
+            # 規定回数以上の繰り返しで打ち切り
             truncated = True
             reward -= 2.0 # 強めのペナルティを与えてループを確実に避けさせる
             info["reason"] = "sennichite"
+            info["winner"] = 0
+
+        if terminated or truncated:
+            info.setdefault("winner", 0)
+            info["game_record"] = list(self.game_record_moves)
 
         return self._get_obs(), reward, terminated, truncated, info
 
     def _get_obs(self):
-        obs_board = np.zeros((30, 9, 9, 9), dtype=np.float32)
+        obs_dtype = np.uint8 if self.use_uint8_obs else np.float32
+        one_val = 1 if self.use_uint8_obs else 1.0
+        obs_board = np.zeros((30, 9, 9, 9), dtype=obs_dtype)
         sente_mask = (self.owner == Player.SENTE) & (self.board > PieceType.NONE)
         if np.any(sente_mask):
             xs, ys, zs = np.where(sente_mask)
             pcs = self.board[sente_mask] - 1
-            obs_board[pcs, xs, ys, zs] = 1.0
+            obs_board[pcs, xs, ys, zs] = one_val
 
         gote_mask = (self.owner == Player.GOTE) & (self.board > PieceType.NONE)
         if np.any(gote_mask):
             xg, yg, zg = np.where(gote_mask)
             pcg = self.board[gote_mask] - 1 + 15
-            obs_board[pcg, xg, yg, zg] = 1.0
+            obs_board[pcg, xg, yg, zg] = one_val
         
         def get_hand_vec(player):
-            vec = np.zeros(7, dtype=np.float32)
+            vec = np.zeros(7, dtype=obs_dtype)
             for p, cnt in self.hands[player].items():
                 idx = HAND_INDEX.get(p)
                 if idx is not None:
-                    vec[idx] += float(cnt)
+                    vec[idx] += int(cnt) if self.use_uint8_obs else float(cnt)
             return vec
 
         return {
             "board": obs_board,
             "hand_sente": get_hand_vec(Player.SENTE),
             "hand_gote": get_hand_vec(Player.GOTE),
-            "current_player": np.array([1.0 if self.current_player == Player.SENTE else 0.0], dtype=np.float32)
+            "current_player": np.array([1 if self.current_player == Player.SENTE else 0], dtype=obs_dtype)
         }
+
+    def _piece_reward_unit(self, ptype):
+        return PIECE_VALUES.get(ptype, 0) / 100.0
+
+    def _tactical_delta_after_move(self, acting_player, tx, ty, tz):
+        if not self.enable_tactical_reward:
+            return 0.0
+        if not (0 <= tx < 9 and 0 <= ty < 9 and 0 <= tz < 9):
+            return 0.0
+
+        moved_piece = self.board[tx, ty, tz]
+        if moved_piece == PieceType.NONE:
+            return 0.0
+
+        opp = Player.GOTE if acting_player == Player.SENTE else Player.SENTE
+        delta = 0.0
+
+        # 移動先が敵に利かれていて味方の利きがないなら「ただ取られ」ペナルティ。
+        if moved_piece != PieceType.OU:
+            attacked = self.attack_map[opp, tx, ty, tz] > 0
+            defended = self.attack_map[acting_player, tx, ty, tz] > 0
+            if attacked and not defended:
+                hanging = self._piece_reward_unit(moved_piece) * self.hanging_penalty_weight
+                delta -= min(hanging, self.hanging_penalty_cap)
+
+        # 移動した駒が狙える敵駒のうち「無防備」な最大価値をボーナスにする。
+        best_free_capture = 0.0
+        moved_attacks = self.piece_move_cache.get((tx, ty, tz), ())
+        for ax, ay, az in moved_attacks:
+            if self.owner[ax, ay, az] != opp:
+                continue
+            target_ptype = self.board[ax, ay, az]
+            if target_ptype in (PieceType.NONE, PieceType.OU):
+                continue
+            if self.attack_map[opp, ax, ay, az] <= 0:
+                best_free_capture = max(best_free_capture, self._piece_reward_unit(target_ptype))
+
+        if best_free_capture > 0.0:
+            gain = best_free_capture * self.free_capture_bonus_weight
+            delta += min(gain, self.free_capture_bonus_cap)
+
+        return float(delta)
 
     # --- アクションマスク (MaskablePPO 用) ---
     def action_masks(self):
@@ -569,13 +671,21 @@ class Shogi3DEnv(gym.Env):
         if currently_in_check:
             return pinned_info
 
+        if self.use_cpp_pinned and cpp_kingcheck is not None and cpp_kingcheck.cpp_available():
+            cpp_rows = cpp_kingcheck.compute_pinned_pieces(self.board, self.owner, int(player), bool(currently_in_check))
+            if cpp_rows is not None:
+                for row in cpp_rows:
+                    px, py, pz, dx, dy, dz, attacker_t = row
+                    pinned_info[(int(px), int(py), int(pz))] = (int(dx), int(dy), int(dz), int(attacker_t))
+                return pinned_info
+
         king = self.king_positions.get(player)
         if king is None:
             return pinned_info
         kx, ky, kz = king
 
         opp = Player.GOTE if player == Player.SENTE else Player.SENTE
-        dy_opp = 1 if opp == Player.SENTE else -1
+        dy_opp = -1 if opp == Player.SENTE else 1
         for dx, dy, dz in _HI_DIRS + _KAKU_DIRS:
             tx, ty, tz = kx + dx, ky + dy, kz + dz
             first_piece = None
@@ -643,17 +753,44 @@ class Shogi3DEnv(gym.Env):
             hm = self._hand_counts_vec(player)
             cpp_moves = cpp_kingcheck.generate_legal_moves(self.board, self.owner, hm, int(player))
             if cpp_moves is not None:
-                king = self.king_positions.get(player)
-                currently_in_check = self._is_king_in_check(player)
-                pinned_info = self._compute_pinned_pieces(player, currently_in_check)
+                # C++ legal-move outputをどこまでPython側で再検証するかを段階化する。
+                # level 0: 既存挙動(安全性重視)
+                # level 1: 盤面整合の軽量チェックのみ(王手/ピン再計算は省略)
+                # level 2: C++出力を全面信頼(最速)
+                cpp_filter_level = int(self.cpp_filter_level)
+                if cpp_filter_level < 0:
+                    cpp_filter_level = 0
+                if cpp_filter_level > 2:
+                    cpp_filter_level = 2
+                if self.cpp_strict_filter:
+                    cpp_filter_level = 0
+
+                use_python_pin_filter = (cpp_filter_level == 0)
+                use_python_safety = (cpp_filter_level == 0)
+                use_structural_validation = (cpp_filter_level <= 1)
+
+                king = None
+                currently_in_check = False
+                pinned_info = {}
+                if use_python_pin_filter or use_python_safety:
+                    currently_in_check = self._is_king_in_check(player)
+                if use_python_pin_filter:
+                    king = self.king_positions.get(player)
+                    pinned_info = self._compute_pinned_pieces(player, currently_in_check)
+
                 filtered = []
                 src_cache = {} if self.cpp_strict_filter else None
                 for m in cpp_moves:
                     fx, fy, fz, tx, ty, tz, promote, is_drop, dt = m
                     if is_drop:
-                        if self.board[tx, ty, tz] != PieceType.NONE:
-                            continue
-                        if currently_in_check:
+                        if use_structural_validation:
+                            if not (0 <= tx < 9 and 0 <= ty < 9 and 0 <= tz < 9):
+                                continue
+                            if not (0 <= dt < len(DROP_TYPES)):
+                                continue
+                            if self.board[tx, ty, tz] != PieceType.NONE:
+                                continue
+                        if use_python_safety and currently_in_check:
                             # dt mapping: FU,KYO,KEI,GIN,KIN,KAKU,HI
                             ptype = [PieceType.FU, PieceType.KYO, PieceType.KEI, PieceType.GIN, PieceType.KIN, PieceType.KAKU, PieceType.HI][dt]
                             if not self._is_drop_safe(ptype, tx, ty, tz, player):
@@ -684,26 +821,33 @@ class Shogi3DEnv(gym.Env):
                         if (tx, ty, tz) not in pseudo_set:
                             continue
                     else:
-                        if not (0 <= fx < 9 and 0 <= fy < 9 and 0 <= fz < 9 and 0 <= tx < 9 and 0 <= ty < 9 and 0 <= tz < 9):
-                            continue
-                        if self.owner[fx, fy, fz] != player:
-                            continue
-                        if self.owner[tx, ty, tz] == player:
-                            continue
-                        is_ou = self.board[fx, fy, fz] == PieceType.OU
-                        pin_meta = pinned_info.get(skey)
+                        if use_structural_validation:
+                            if not (0 <= fx < 9 and 0 <= fy < 9 and 0 <= fz < 9 and 0 <= tx < 9 and 0 <= ty < 9 and 0 <= tz < 9):
+                                continue
+                            if self.owner[fx, fy, fz] != player:
+                                continue
+                            if self.owner[tx, ty, tz] == player:
+                                continue
+                            is_ou = self.board[fx, fy, fz] == PieceType.OU
+                            pin_meta = pinned_info.get(skey) if use_python_pin_filter else None
+                        else:
+                            is_ou = False
+                            pin_meta = None
 
-                    is_pinned = pin_meta is not None
-                    if is_pinned and (not currently_in_check) and (not is_ou):
-                        pdx, pdy, pdz, attacker_t = pin_meta
-                        t = self._ray_param_from_king(king, (tx, ty, tz), (pdx, pdy, pdz))
-                        if t is None or t > attacker_t:
-                            continue
-                        need_safety = False
+                    if use_python_pin_filter:
+                        is_pinned = pin_meta is not None
+                        if is_pinned and (not currently_in_check) and (not is_ou):
+                            pdx, pdy, pdz, attacker_t = pin_meta
+                            t = self._ray_param_from_king(king, (tx, ty, tz), (pdx, pdy, pdz))
+                            if t is None or t > attacker_t:
+                                continue
+                            need_safety = False
+                        else:
+                            need_safety = currently_in_check or is_ou or is_pinned
                     else:
-                        need_safety = currently_in_check or is_ou or is_pinned
+                        need_safety = False
 
-                    if need_safety:
+                    if use_python_safety and need_safety:
                         if not self._is_move_safe(fx, fy, fz, tx, ty, tz, player):
                             continue
                     filtered.append(m)
@@ -945,7 +1089,7 @@ class Shogi3DEnv(gym.Env):
         kx, ky, kz = king
 
         opp = Player.GOTE if player == Player.SENTE else Player.SENTE
-        dy_opp = 1 if opp == Player.SENTE else -1
+        dy_opp = -1 if opp == Player.SENTE else 1
 
         for dx, dy, dz in _HI_DIRS:
             tx, ty, tz = kx+dx, ky+dy, kz+dz

@@ -26,6 +26,27 @@ REASON_LABEL_JP = {
 }
 
 
+def _format_game_result_line(game, game_index_1based, avg_turns_so_far):
+    model_side = int(game["model_side"])
+    reason = str(game.get("reason", "unknown"))
+    reason_jp = REASON_LABEL_JP.get(reason, reason)
+    ai_side_jp = "先手" if model_side == Player.SENTE else "後手"
+    random_side_jp = "後手" if model_side == Player.SENTE else "先手"
+    winner_role = game.get("winner_role", "unknown")
+    if winner_role == "ai":
+        winner_jp = f"AI({ai_side_jp})"
+    elif winner_role == "random":
+        winner_jp = f"Random({random_side_jp})"
+    elif winner_role == "draw":
+        winner_jp = "引き分け"
+    else:
+        winner_jp = "不明"
+    return (
+        f"  [対局 {game_index_1based:5d}] 終了理由: {reason_jp:8s} | 手数: {int(game.get('turn_count', 0)):4d} | "
+        f"平均: {avg_turns_so_far:6.1f} | 勝者: {winner_jp}"
+    )
+
+
 def choose_random_action(env):
     legal_action_map = env._get_legal_action_map(env.current_player)
     if not legal_action_map:
@@ -101,13 +122,19 @@ def run_game(model, model_side, seed, opening_random_plies, deterministic, live_
 
         if live_context is not None:
             now = time.time()
-            if now - live_context["last_live_print_ts"] >= 0.2:
+            live_interval_sec = float(live_context.get("live_interval_sec", 0.2))
+            if now - live_context["last_live_print_ts"] >= live_interval_sec:
                 current_turn = int(env.turn_count)
                 elapsed = now - live_context["start_time"]
                 steps_done = int(live_context["total_turns_before"] + current_turn)
                 tps_total = steps_done / max(elapsed, 1e-6)
+                game_start_time = float(live_context.get("game_start_time", live_context["start_time"]))
+                elapsed_game = now - game_start_time
+                tps_game = current_turn / max(elapsed_game, 1e-6)
+                game_index = int(live_context.get("game_index", 0)) + 1
+                total_games = int(live_context.get("total_games", 0))
                 sys.stdout.write(
-                    f"\r  [進行中] 現在対局手数: {current_turn:4d} | 手数/s(合計): {tps_total:6.2f} | 1環境換算: {tps_total:6.2f}"
+                    f"\r  [進行中] 対局 {game_index:3d}/{total_games:3d} | 手数: {current_turn:4d} | 手数/s(対局): {tps_game:6.2f} | 手数/s(合計): {tps_total:6.2f}"
                 )
                 sys.stdout.flush()
                 live_context["last_live_print_ts"] = now
@@ -117,8 +144,13 @@ def run_game(model, model_side, seed, opening_random_plies, deterministic, live_
                 elapsed = now - live_context["start_time"]
                 steps_done = int(live_context["total_turns_before"] + current_turn)
                 tps_total = steps_done / max(elapsed, 1e-6)
+                game_start_time = float(live_context.get("game_start_time", live_context["start_time"]))
+                elapsed_game = now - game_start_time
+                tps_game = current_turn / max(elapsed_game, 1e-6)
+                game_index = int(live_context.get("game_index", 0)) + 1
+                total_games = int(live_context.get("total_games", 0))
                 print(
-                    f"\n  [進行ログ] 現在対局手数: {current_turn:4d} | 手数/s(合計): {tps_total:6.2f} | 1環境換算: {tps_total:6.2f}"
+                    f"\n  [進行ログ] 対局 {game_index:3d}/{total_games:3d} | 手数: {current_turn:4d} | 手数/s(対局): {tps_game:6.2f} | 手数/s(合計): {tps_total:6.2f}"
                 )
                 live_context["last_periodic_log_ts"] = now
 
@@ -201,6 +233,8 @@ def _evaluate_one_game(game_index, opening_random_plies, deterministic, seed):
 
 def evaluate(model_path, games, opening_random_plies, deterministic, seed, device, workers):
     model_path = _resolve_model_path(model_path)
+    model_name = os.path.basename(model_path)
+    print(f"[EVAL] model file: {model_name}", flush=True)
     print(f"[EVAL] model path resolved: {model_path}", flush=True)
     print(f"[EVAL] loading model on device={device} ...", flush=True)
 
@@ -237,11 +271,15 @@ def evaluate(model_path, games, opening_random_plies, deterministic, seed, devic
         print("[EVAL] single-worker loop start", flush=True)
         start_time = time.time()
         total_turns_before = 0
-        last_live_print_ts = 0.0
-        last_periodic_log_ts = 0.0
-        periodic_log_interval_sec = float(os.getenv("SHOGI_EVAL_LOG_INTERVAL_SEC", "3"))
+        periodic_log_interval_sec = float(os.getenv("SHOGI_EVAL_LOG_INTERVAL_SEC", "0"))
+        live_interval_sec = float(os.getenv("SHOGI_EVAL_LIVE_INTERVAL_SEC", "0.25"))
+        print(
+            f"[EVAL] live progress enabled: live={live_interval_sec:.2f}s periodic={periodic_log_interval_sec:.2f}s",
+            flush=True,
+        )
         for i in range(games):
             model_side = Player.SENTE if (i % 2 == 0) else Player.GOTE
+            game_start_time = time.time()
             game = run_game(
                 model=model,
                 model_side=model_side,
@@ -251,18 +289,22 @@ def evaluate(model_path, games, opening_random_plies, deterministic, seed, devic
                 live_context={
                     "start_time": start_time,
                     "total_turns_before": total_turns_before,
-                    "last_live_print_ts": last_live_print_ts,
-                    "last_periodic_log_ts": last_periodic_log_ts,
+                    "last_live_print_ts": 0.0,
+                    "last_periodic_log_ts": 0.0,
+                    "live_interval_sec": live_interval_sec,
                     "periodic_log_interval_sec": periodic_log_interval_sec,
+                    "game_start_time": game_start_time,
+                    "game_index": i,
+                    "total_games": games,
                 },
             )
-            last_live_print_ts = time.time()
-            last_periodic_log_ts = last_live_print_ts
             game["game_index"] = int(i)
             game_results.append(game)
             total_turns_before += int(game.get("turn_count", 0))
             sys.stdout.write("\r" + " " * 120 + "\r")
             sys.stdout.flush()
+            avg_turns_so_far = total_turns_before / max(i + 1, 1)
+            print(_format_game_result_line(game, i + 1, avg_turns_so_far))
         print("")
     else:
         print("[INFO] workers>1 のため、現在対局手数/TPS の逐次表示は省略し、完了対局数のみ表示します。")
@@ -285,6 +327,11 @@ def evaluate(model_path, games, opening_random_plies, deterministic, seed, devic
                     game = fut.result()
                     game_results.append(game)
                     done_games += 1
+                    done_turns = sum(int(g.get("turn_count", 0)) for g in game_results)
+                    avg_turns_so_far = done_turns / max(done_games, 1)
+                    sys.stdout.write("\r" + " " * 120 + "\r")
+                    sys.stdout.flush()
+                    print(_format_game_result_line(game, int(game.get("game_index", done_games - 1)) + 1, avg_turns_so_far))
                 pending = not_done
                 sys.stdout.write(f"\r[進行中] 完了対局数: {done_games}/{games}")
                 sys.stdout.flush()
@@ -292,7 +339,7 @@ def evaluate(model_path, games, opening_random_plies, deterministic, seed, devic
 
     game_results.sort(key=lambda g: int(g.get("game_index", 0)))
 
-    for i, game in enumerate(game_results):
+    for game in game_results:
         model_side = int(game["model_side"])
 
         total_turns += game["turn_count"]
@@ -313,25 +360,6 @@ def evaluate(model_path, games, opening_random_plies, deterministic, seed, devic
             summary["by_side"][side_key]["draws"] += 1
         else:
             summary["unknown"] += 1
-
-        avg_turns = total_turns / max(i + 1, 1)
-        reason_jp = REASON_LABEL_JP.get(reason, reason)
-        ai_side_jp = "先手" if model_side == Player.SENTE else "後手"
-        random_side_jp = "後手" if model_side == Player.SENTE else "先手"
-        winner_role = game.get("winner_role", "unknown")
-        if winner_role == "ai":
-            winner_jp = f"AI({ai_side_jp})"
-        elif winner_role == "random":
-            winner_jp = f"Random({random_side_jp})"
-        elif winner_role == "draw":
-            winner_jp = "引き分け"
-        else:
-            winner_jp = "不明"
-
-        print(
-            f"\n  [対局 {i + 1:5d}] 終了理由: {reason_jp:8s} | 手数: {game['turn_count']:4d} | "
-            f"平均: {avg_turns:6.1f} | 勝者: {winner_jp}"
-        )
 
     summary["avg_turns"] = round(total_turns / max(games, 1), 3)
     summary["win_rate"] = round(summary["wins"] / max(games, 1), 4)

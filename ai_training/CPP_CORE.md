@@ -27,6 +27,17 @@ Set environment variable:
 
 SHOGI_USE_CPP_KINGCHECK=1
 SHOGI_USE_CPP_LEGAL_MOVES=1
+SHOGI_USE_CPP_PINNED=1
+SHOGI_CPP_STRICT_FILTER=0
+SHOGI_CPP_FILTER_LEVEL=1
+
+Filter level semantics:
+
+- 0: Python-side full post-filter (safest)
+- 1: Structural validation only (recommended training default)
+- 2: Trust C++ output fully (fastest)
+
+Note: if SHOGI_CPP_STRICT_FILTER=1, level behaves as 0.
 
 If module load fails, env falls back to Python logic.
 

@@ -18,6 +18,34 @@ export const GamePhase = {
   DONE: 'done',
 };
 
+const AI_PIECE_TYPES = [
+  PieceType.NONE,
+  PieceType.FU,
+  PieceType.KYO,
+  PieceType.KEI,
+  PieceType.GIN,
+  PieceType.KIN,
+  PieceType.KAKU,
+  PieceType.HI,
+  PieceType.OU,
+  PieceType.NARI_FU,
+  PieceType.NARI_KYO,
+  PieceType.NARI_KEI,
+  PieceType.NARI_GIN,
+  PieceType.UMA,
+  PieceType.RYU,
+];
+
+const AI_DROP_TYPES = [
+  PieceType.FU,
+  PieceType.KYO,
+  PieceType.KEI,
+  PieceType.GIN,
+  PieceType.KIN,
+  PieceType.KAKU,
+  PieceType.HI,
+];
+
 export class GameState {
   constructor(mode = GameMode.LOCAL) {
     this.mode = mode;
@@ -37,6 +65,13 @@ export class GameState {
     this.highlightedSlice = null; // { axis: 'x'|'y'|'z', index: 0-8 }
     this.piecePositions = { [Player.SENTE]: new Set(), [Player.GOTE]: new Set() };
     this.kingPos = { [Player.SENTE]: null, [Player.GOTE]: null };
+    this.npcPlayer = Player.GOTE;
+    this.humanPlayer = Player.SENTE;
+  }
+
+  setNpcPlayer(npcPlayer = Player.GOTE) {
+    this.npcPlayer = npcPlayer;
+    this.humanPlayer = npcPlayer === Player.SENTE ? Player.GOTE : Player.SENTE;
   }
 
   startGame() {
@@ -75,6 +110,7 @@ export class GameState {
 
   toggleHandSelect(type) {
     if (this.phase === GamePhase.IDLE || this.phase === GamePhase.DONE || this.phase === GamePhase.PROMOTE) return;
+    if (this.mode === GameMode.NPC && this.currentPlayer !== this.humanPlayer) return;
     if (this.selectedHandType === type) {
       this._cancelSelect();
       return;
@@ -116,6 +152,7 @@ export class GameState {
 
   handleClick(x, y, z) {
     if (this.phase === GamePhase.IDLE || this.phase === GamePhase.DONE || this.phase === GamePhase.PROMOTE) return;
+    if (this.mode === GameMode.NPC && this.currentPlayer !== this.humanPlayer) return;
 
     // 断面制限: 座標が断面内のみ入力を許可（他層への移動例外は廃止）
     if (this.highlightedSlice) {
@@ -308,6 +345,124 @@ export class GameState {
     const cell = this.board.get(tx, ty, tz);
     this.logger.addMove(this.currentPlayer, tx, ty, tz, type, -1, false, null); // No captured piece for a drop
     this._endTurn();
+  }
+
+  exportForAI() {
+    const board = Array.from({ length: 9 }, () => Array.from({ length: 9 }, () => Array(9).fill(0)));
+    const owner = Array.from({ length: 9 }, () => Array.from({ length: 9 }, () => Array(9).fill(0)));
+
+    for (let x = 0; x < 9; x++) {
+      for (let y = 0; y < 9; y++) {
+        for (let z = 0; z < 9; z++) {
+          const cell = this.board.get(x, y, z);
+          if (!cell || cell.type === PieceType.NONE) continue;
+          board[x][y][z] = AI_PIECE_TYPES.indexOf(cell.type);
+          owner[x][y][z] = cell.player;
+        }
+      }
+    }
+
+    const countHand = (player) => {
+      const counts = Array(7).fill(0);
+      for (const p of this.capturedPieces[player] || []) {
+        const idx = AI_DROP_TYPES.indexOf(p.type);
+        if (idx >= 0) counts[idx] += 1;
+      }
+      return counts;
+    };
+
+    return {
+      board,
+      owner,
+      hand_sente: countHand(Player.SENTE),
+      hand_gote: countHand(Player.GOTE),
+      current_player: this.currentPlayer,
+    };
+  }
+
+  applyAIMove(move) {
+    if (!move || this.phase === GamePhase.DONE || this.phase === GamePhase.PROMOTE) return false;
+    if (this.mode === GameMode.NPC && this.currentPlayer !== this.npcPlayer) return false;
+
+    const tx = Number(move.tx);
+    const ty = Number(move.ty);
+    const tz = Number(move.tz);
+    const isDrop = Boolean(move.is_drop);
+    const promote = Boolean(move.promote);
+
+    if (isDrop) {
+      const dropType = AI_DROP_TYPES[Number(move.drop_type)];
+      if (!dropType) return false;
+
+      const hand = this.capturedPieces[this.currentPlayer] || [];
+      const idx = hand.findIndex((p) => p.type === dropType);
+      if (idx < 0) return false;
+
+      hand.splice(idx, 1);
+      this.board.set(tx, ty, tz, makeCellForPlayer(dropType, this.currentPlayer));
+      this._addPiecePos(this.currentPlayer, tx, ty, tz);
+      this.lastFrom = null;
+      this.lastTo = { x: tx, y: ty, z: tz };
+      this.logger.addMove(this.currentPlayer, tx, ty, tz, dropType, -1, false, null);
+      this._endTurn();
+      return true;
+    }
+
+    const fx = Number(move.fx);
+    const fy = Number(move.fy);
+    const fz = Number(move.fz);
+    const fromCell = this.board.get(fx, fy, fz);
+    if (!fromCell || fromCell.type === PieceType.NONE || fromCell.player !== this.currentPlayer) return false;
+
+    const captured = this.board.move(fx, fy, fz, tx, ty, tz);
+    this._removePiecePos(this.currentPlayer, fx, fy, fz);
+    this._addPiecePos(this.currentPlayer, tx, ty, tz);
+
+    let loggedCapturedType = null;
+    if (captured) {
+      const opponent = this.currentPlayer === Player.SENTE ? Player.GOTE : Player.SENTE;
+      this._removePiecePos(opponent, tx, ty, tz);
+
+      captured.type = demoteType(captured.type);
+      captured.promoted = false;
+      captured.player = this.currentPlayer;
+      this.capturedPieces[this.currentPlayer].push(captured);
+      loggedCapturedType = captured.type;
+
+      if (captured.type === PieceType.OU) {
+        this.lastFrom = { x: fx, y: fy, z: fz };
+        this.lastTo = { x: tx, y: ty, z: tz };
+        this.winnerPlayer = this.currentPlayer;
+        this.phase = GamePhase.DONE;
+        this._notify();
+        return true;
+      }
+    }
+
+    const movedCell = this.board.get(tx, ty, tz);
+    if (movedCell && movedCell.type === PieceType.OU) {
+      this.kingPos[this.currentPlayer] = { x: tx, y: ty, z: tz };
+    }
+
+    const promoBy = isPromotionZone(fy, this.currentPlayer) || isPromotionZone(ty, this.currentPlayer);
+    if (promote && movedCell && promoBy && canPromote(movedCell.type)) {
+      const promotedType = PromotionMap[movedCell.type];
+      if (promotedType) {
+        movedCell.type = promotedType;
+        movedCell.promoted = true;
+      }
+    }
+
+    this.lastFrom = { x: fx, y: fy, z: fz };
+    this.lastTo = { x: tx, y: ty, z: tz };
+    this.selectedPos = null;
+    this.confirmedPos = null;
+    this.legalMoves = [];
+    this.selectedHandType = null;
+
+    this.logger.addMove(this.currentPlayer, tx, ty, tz, movedCell.type, movedCell.id, promote, loggedCapturedType);
+    this._endTurn();
+    return true;
   }
 
   _endTurn() {

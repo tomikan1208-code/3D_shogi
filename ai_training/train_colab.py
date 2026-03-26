@@ -71,6 +71,8 @@ def main() -> None:
     if args.use_cpp:
         set_default_env("SHOGI_USE_CPP_KINGCHECK", "1")
         set_default_env("SHOGI_USE_CPP_LEGAL_MOVES", "1")
+        set_default_env("SHOGI_USE_CPP_PINNED", "1")
+        set_default_env("SHOGI_CPP_FILTER_LEVEL", "1")
     else:
         set_default_env("SHOGI_USE_CPP_KINGCHECK", "0")
         set_default_env("SHOGI_USE_CPP_LEGAL_MOVES", "0")
@@ -80,6 +82,8 @@ def main() -> None:
     set_default_env("SHOGI_DETERMINISTIC_MOVE_ORDER", "1")
     set_default_env("SHOGI_FAST_DROP_GENERATION", "1")
     set_default_env("SHOGI_USE_LEGAL_MOVES_CACHE", "1")
+    set_default_env("SHOGI_USE_UINT8_OBS", "1")
+    set_default_env("SHOGI_TACTICAL_REWARD", "1")
     set_default_env("SHOGI_COLAB_LOG_INTERVAL_SEC", "20")
 
     print("=== Colab Training Config ===")

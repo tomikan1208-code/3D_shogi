@@ -8,6 +8,8 @@ import { View2D, SliceType } from './view2d.js';
 import { PieceType, Player, PieceName, getPieceGrade } from './board.js';
 import { ROMAN, KANJIDIGIT } from './pieces.js';
 
+const AI_SERVER_URL = '/predict';
+
 // DOM要素
 const container3d    = document.getElementById('container-3d');
 const wrapper2d      = document.getElementById('wrapper-2d');
@@ -49,13 +51,32 @@ const btnRestart     = document.getElementById('btn-restart');
 let gs, view3d, view2d;
 let currentViewMode = '3d';
 let currentSliceType = SliceType.XZ;
+let aiEnabled = false;
+let aiThinking = false;
+let humanPlayer = Player.SENTE;
+let aiPlayer = Player.GOTE;
 
 // ============================================================
 // 初期化
 // ============================================================
 export function initUI() {
-  gs = new GameState(GameMode.LOCAL);
+  const params = new URLSearchParams(window.location.search);
+  aiEnabled = params.get('mode') === 'ai';
+  const side = (params.get('side') || 'sente').toLowerCase();
+  humanPlayer = side === 'gote' ? Player.GOTE : Player.SENTE;
+  aiPlayer = humanPlayer === Player.SENTE ? Player.GOTE : Player.SENTE;
+
+  gs = new GameState(aiEnabled ? GameMode.NPC : GameMode.LOCAL);
+  if (aiEnabled) {
+    gs.setNpcPlayer(aiPlayer);
+  }
   gs.onStateChange = onStateChange;
+
+  const headerTitle = document.querySelector('.header-title');
+  if (headerTitle && aiEnabled) {
+    const sideText = humanPlayer === Player.SENTE ? '先手' : '後手';
+    headerTitle.textContent = `♟ 三次元将棋 (AI対戦: あなたは${sideText})`;
+  }
 
   // 3Dビュー
   view3d = new View3D(container3d, gs);
@@ -154,6 +175,10 @@ function onStateChange(state) {
   };
   if (phaseInfo) phaseInfo.textContent = phaseNames[state.phase] || '';
 
+  if (aiEnabled && state.phase === GamePhase.SELECT && state.currentPlayer === aiPlayer) {
+    if (phaseInfo) phaseInfo.textContent = 'AIが思考中...';
+  }
+
   _refreshViews();
 
   if (state.phase === GamePhase.PROMOTE) {
@@ -176,6 +201,58 @@ function onStateChange(state) {
 
   refreshLog(state);
   updateHandUI(state);
+
+  if (aiEnabled) {
+    maybeRunAITurn(state);
+  }
+}
+
+async function maybeRunAITurn(state) {
+  if (aiThinking) return;
+  if (state.phase !== GamePhase.SELECT) return;
+  if (state.currentPlayer !== aiPlayer) return;
+  if (state.phase === GamePhase.DONE) return;
+
+  aiThinking = true;
+  try {
+    const move = await fetchAIMove(state);
+    if (!move) return;
+
+    const ok = gs.applyAIMove(move);
+    if (!ok && phaseInfo) {
+      phaseInfo.textContent = 'AIの着手適用に失敗しました';
+    }
+  } catch (e) {
+    console.error('AI turn error:', e);
+    if (phaseInfo) {
+      phaseInfo.textContent = 'AI通信エラー (AI.bat と start.bat を確認してください)';
+    }
+  } finally {
+    aiThinking = false;
+  }
+}
+
+async function fetchAIMove(state) {
+  const payload = state.exportForAI();
+  const resp = await fetch(AI_SERVER_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+
+  if (!resp.ok) {
+    let msg = `HTTP ${resp.status}`;
+    try {
+      const err = await resp.json();
+      if (err && err.error) msg = err.error;
+    } catch (_) {
+      // no-op
+    }
+    throw new Error(msg);
+  }
+
+  const data = await resp.json();
+  return data && data.move ? data.move : null;
 }
 
 function updateHandUI(state) {

@@ -8,6 +8,8 @@ import { Logger } from './logger.js';
 
 // 基本設定
 const AI_SERVER_URL = '/predict';
+const REPLAY_LIST_URL = '/watch-replays';
+const REPLAY_LOAD_URL_BASE = '/watch-replays/';
 
 class WatchManager {
   constructor() {
@@ -49,6 +51,8 @@ class WatchManager {
     const seekSlider = document.getElementById('seek-slider');
     const seekInput = document.getElementById('seek-input');
     const btnSeekGo = document.getElementById('btn-seek-go');
+    const btnReplayRefresh = document.getElementById('btn-replay-refresh');
+    const btnReplayLoad = document.getElementById('btn-replay-load');
 
     btnPlay.onclick = () => this.start();
     btnPause.onclick = () => this.stop();
@@ -56,10 +60,111 @@ class WatchManager {
     seekSlider.oninput = (e) => this.seek(parseInt(e.target.value));
     seekInput.onchange = (e) => this.seek(parseInt(e.target.value));
     btnSeekGo.onclick = () => this.seek(parseInt(seekInput.value));
+    if (btnReplayRefresh) btnReplayRefresh.onclick = () => this.refreshReplayList();
+    if (btnReplayLoad) btnReplayLoad.onclick = () => this.loadSelectedReplay();
 
     // 視点切り替え
     document.getElementById('btn-3d-view').onclick = () => this.toggleView('3d');
     document.getElementById('btn-2d-view').onclick = () => this.toggleView('2d');
+
+    this.refreshReplayList();
+  }
+
+  async refreshReplayList() {
+    const select = document.getElementById('replay-select');
+    if (!select) return;
+    select.innerHTML = '';
+    const optLoading = document.createElement('option');
+    optLoading.value = '';
+    optLoading.textContent = '読み込み中...';
+    select.appendChild(optLoading);
+
+    try {
+      const resp = await fetch(REPLAY_LIST_URL);
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const data = await resp.json();
+      const files = Array.isArray(data.files) ? data.files : [];
+
+      select.innerHTML = '';
+      if (files.length === 0) {
+        const empty = document.createElement('option');
+        empty.value = '';
+        empty.textContent = '保存棋譜がありません';
+        select.appendChild(empty);
+        return;
+      }
+      files.forEach((name) => {
+        const opt = document.createElement('option');
+        opt.value = name;
+        opt.textContent = name;
+        select.appendChild(opt);
+      });
+    } catch (e) {
+      select.innerHTML = '';
+      const err = document.createElement('option');
+      err.value = '';
+      err.textContent = '一覧取得失敗';
+      select.appendChild(err);
+      console.error('Failed to load replay list:', e);
+    }
+  }
+
+  async loadSelectedReplay() {
+    const select = document.getElementById('replay-select');
+    if (!select || !select.value) return;
+
+    try {
+      const resp = await fetch(`${REPLAY_LOAD_URL_BASE}${encodeURIComponent(select.value)}`);
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const replay = await resp.json();
+      this.applyReplayData(replay, select.value);
+    } catch (e) {
+      console.error('Failed to load replay:', e);
+      alert('保存棋譜の読み込みに失敗しました。');
+    }
+  }
+
+  applyReplayData(replay, replayName = '') {
+    const moves = Array.isArray(replay?.moves) ? replay.moves : [];
+    if (moves.length === 0) {
+      alert('この棋譜には手が含まれていません。');
+      return;
+    }
+
+    this.stop();
+    this.isGenerating = false;
+    this.isPlaying = false;
+    this.isPrecomputed = false;
+    this.resetMatchState();
+
+    for (const m of moves) {
+      const move = {
+        fx: Number(m.fx) || 0,
+        fy: Number(m.fy) || 0,
+        fz: Number(m.fz) || 0,
+        tx: Number(m.tx) || 0,
+        ty: Number(m.ty) || 0,
+        tz: Number(m.tz) || 0,
+        promote: Boolean(m.promote),
+        is_drop: Boolean(m.is_drop),
+        drop_type: Number(m.drop_type) || 0,
+      };
+      this.executeMove(move);
+      this.saveHistory();
+    }
+
+    this.isPrecomputed = this.history.length > 1;
+    this.playbackIndex = 0;
+    this.applySnapshot(0);
+    this.refresh();
+    this.updateSeekUI();
+    this.updateControls();
+
+    const reason = replay?.reason || 'unknown';
+    const winner = Number(replay?.winner) || 0;
+    const winnerText = winner === Player.SENTE ? '先手' : (winner === Player.GOTE ? '後手' : '引き分け/不明');
+    const label = replayName ? ` (${replayName})` : '';
+    document.getElementById('phase-info').textContent = `棋譜読込${label}: ${moves.length}手 / 理由=${reason} / 勝者=${winnerText}`;
   }
 
   async start() {

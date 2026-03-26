@@ -47,12 +47,12 @@ class Shogi3DFeaturesExtractor(BaseFeaturesExtractor):
 
     def forward(self, observations):
         # 盤面
-        board_features = self.cnn(observations["board"])
+        board_features = self.cnn(observations["board"].float())
         # 持ち駒 + 手番情報を結合してMLPへ
         hand_turn = torch.cat([
-            observations["hand_sente"], 
-            observations["hand_gote"], 
-            observations["current_player"]
+            observations["hand_sente"].float(), 
+            observations["hand_gote"].float(), 
+            observations["current_player"].float()
         ], dim=1)
         hand_features = self.hand_mlp(hand_turn)
         

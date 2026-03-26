@@ -1,0 +1,8 @@
+{
+    "chat.tools.terminal.autoApprove": {
+        "/^c:/Users/tomik/\\.gemini/antigravity/3d_shogi/\\.venv/Scripts/python\\.exe -u -c \"import time; print\\('py start', flush=True\\); import torch; print\\('torch ok', torch\\.__version__, flush=True\\)\"$/": {
+            "approve": true,
+            "matchCommandLine": true
+        }
+    }
+}

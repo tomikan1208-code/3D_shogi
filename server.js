@@ -7,6 +7,7 @@ const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
 const path = require('path');
+const fs = require('fs');
 
 const app = express();
 const server = http.createServer(app);
@@ -16,6 +17,7 @@ const io = new Server(server, {
 
 const PORT = process.env.PORT || 3000;
 const PROXY_VERBOSE = process.env.SHOGI_PROXY_VERBOSE === '1';
+const REPLAY_DIR = path.join(__dirname, 'ai_training', 'replay_logs');
 
 // ============================================================
 // 静的ファイル配信
@@ -67,6 +69,37 @@ app.post('/predict', (req, res) => {
 
   proxyReq.write(JSON.stringify(req.body));
   proxyReq.end();
+});
+
+app.get('/watch-replays', (req, res) => {
+  try {
+    if (!fs.existsSync(REPLAY_DIR)) {
+      return res.json({ ok: true, files: [] });
+    }
+    const files = fs
+      .readdirSync(REPLAY_DIR)
+      .filter((name) => name.endsWith('.json'))
+      .sort((a, b) => b.localeCompare(a));
+    return res.json({ ok: true, files });
+  } catch (e) {
+    return res.status(500).json({ ok: false, error: String(e) });
+  }
+});
+
+app.get('/watch-replays/:name', (req, res) => {
+  try {
+    const name = String(req.params.name || '');
+    if (!/^[A-Za-z0-9_.-]+\.json$/.test(name)) {
+      return res.status(400).json({ ok: false, error: 'invalid file name' });
+    }
+    const fp = path.join(REPLAY_DIR, name);
+    if (!fs.existsSync(fp)) {
+      return res.status(404).json({ ok: false, error: 'file not found' });
+    }
+    return res.sendFile(fp);
+  } catch (e) {
+    return res.status(500).json({ ok: false, error: String(e) });
+  }
 });
 
 // ============================================================

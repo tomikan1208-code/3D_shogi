@@ -89,11 +89,11 @@ king_found:
                 if (own == opp) {
                     int p = b(tx, ty, tz);
                     if (p == HI || p == RYU) return true;
-                    if (p == KYO && dx == 0 && dy == -dy_opp && dz == 0) return true;
+                    if (p == KYO && dx == 0 && dy == dy_opp && dz == 0) return true;
                     if (dist == 1) {
                         if (p == OU) return true;
                         if ((p == KIN || p == NARI_FU || p == NARI_KYO || p == NARI_KEI || p == NARI_GIN) && is_kin_dir(dx, dy, dz, dy_opp)) return true;
-                        if (p == FU && dx == 0 && dy == -dy_opp && dz == 0) return true;
+                        if (p == FU && dx == 0 && dy == dy_opp && dz == 0) return true;
                         if (p == GIN && is_gin_dir(dx, dy, dz, dy_opp)) return true;
                     }
                 }
@@ -138,7 +138,7 @@ king_found:
     };
     for (int i = 0; i < 4; ++i) {
         int tx = kx + KEI_REL[i][0];
-        int ty = ky - 2 * dy_opp;
+        int ty = ky + 2 * dy_opp;
         int tz = kz + KEI_REL[i][2];
         if (!in_board(tx, ty, tz)) continue;
         if (o(tx, ty, tz) == opp && b(tx, ty, tz) == KEI) return true;
@@ -169,6 +169,133 @@ static inline int idx3(int x, int y, int z) {
 
 static inline bool is_promo_zone(int y, int player) {
     return (player == 1) ? (y <= 2) : (y >= 6);
+}
+
+py::array_t<int> compute_pinned_pieces_cpp(
+    py::array_t<int, py::array::c_style | py::array::forcecast> board,
+    py::array_t<signed char, py::array::c_style | py::array::forcecast> owner,
+    int player,
+    bool currently_in_check) {
+
+    auto b = board.unchecked<3>();
+    auto o = owner.unchecked<3>();
+
+    const int NONE = 0;
+    const int SENTE = 1;
+    const int GOTE = 2;
+
+    const int KYO = 2;
+    const int KAKU = 6;
+    const int HI = 7;
+    const int OU = 8;
+    const int UMA = 13;
+    const int RYU = 14;
+
+    static const int HI_DIRS[6][3] = {
+        {1, 0, 0}, {-1, 0, 0}, {0, 1, 0}, {0, -1, 0}, {0, 0, 1}, {0, 0, -1}
+    };
+    static const int KAKU_DIRS[12][3] = {
+        {1, 1, 0}, {1, -1, 0}, {-1, 1, 0}, {-1, -1, 0},
+        {1, 0, 1}, {1, 0, -1}, {-1, 0, 1}, {-1, 0, -1},
+        {0, 1, 1}, {0, 1, -1}, {0, -1, 1}, {0, -1, -1}
+    };
+
+    py::array_t<int> empty_out({static_cast<py::ssize_t>(0), static_cast<py::ssize_t>(7)});
+    if (currently_in_check) {
+        return empty_out;
+    }
+
+    int king_x = -1, king_y = -1, king_z = -1;
+    for (int x = 0; x < 9; ++x) {
+        for (int y = 0; y < 9; ++y) {
+            for (int z = 0; z < 9; ++z) {
+                if (o(x, y, z) == player && b(x, y, z) == OU) {
+                    king_x = x;
+                    king_y = y;
+                    king_z = z;
+                    goto king_found_pin;
+                }
+            }
+        }
+    }
+king_found_pin:
+    if (king_x < 0) {
+        return empty_out;
+    }
+
+    int opp = (player == SENTE) ? GOTE : SENTE;
+    int dy_opp = (opp == SENTE) ? -1 : 1;
+
+    std::vector<int> flat;
+    flat.reserve(64);
+
+    for (int i = 0; i < 6 + 12; ++i) {
+        int dx, dy, dz;
+        if (i < 6) {
+            dx = HI_DIRS[i][0];
+            dy = HI_DIRS[i][1];
+            dz = HI_DIRS[i][2];
+        } else {
+            int j = i - 6;
+            dx = KAKU_DIRS[j][0];
+            dy = KAKU_DIRS[j][1];
+            dz = KAKU_DIRS[j][2];
+        }
+
+        int tx = king_x + dx, ty = king_y + dy, tz = king_z + dz;
+        int first_x = -1, first_y = -1, first_z = -1;
+        int attacker_t = 1;
+        while (in_board(tx, ty, tz)) {
+            int own = o(tx, ty, tz);
+            if (own != NONE) {
+                if (own == player) {
+                    if (first_x < 0) {
+                        first_x = tx;
+                        first_y = ty;
+                        first_z = tz;
+                    } else {
+                        break;
+                    }
+                } else {
+                    if (first_x >= 0) {
+                        int p = b(tx, ty, tz);
+                        bool is_pinned = false;
+                        if ((p == HI || p == RYU) && i < 6) {
+                            is_pinned = true;
+                        } else if ((p == KAKU || p == UMA) && i >= 6) {
+                            is_pinned = true;
+                        } else if (p == KYO && dx == 0 && dy == -dy_opp && dz == 0) {
+                            is_pinned = true;
+                        }
+                        if (is_pinned) {
+                            flat.push_back(first_x);
+                            flat.push_back(first_y);
+                            flat.push_back(first_z);
+                            flat.push_back(dx);
+                            flat.push_back(dy);
+                            flat.push_back(dz);
+                            flat.push_back(attacker_t);
+                        }
+                    }
+                    break;
+                }
+            }
+            tx += dx;
+            ty += dy;
+            tz += dz;
+            attacker_t += 1;
+        }
+    }
+
+    py::ssize_t n = static_cast<py::ssize_t>(flat.size() / 7);
+    py::array_t<int> out({n, static_cast<py::ssize_t>(7)});
+    auto outm = out.mutable_unchecked<2>();
+    for (py::ssize_t i = 0; i < n; ++i) {
+        for (int j = 0; j < 7; ++j) {
+            outm(i, j) = flat[static_cast<size_t>(i) * 7 + static_cast<size_t>(j)];
+        }
+    }
+    return out;
 }
 
 template <typename BO, typename OO>
@@ -242,11 +369,11 @@ king_found2:
                 if (own == opp) {
                     int p = b(tx, ty, tz);
                     if (p == HI || p == RYU) return true;
-                    if (p == KYO && dx == 0 && dy == -dy_opp && dz == 0) return true;
+                    if (p == KYO && dx == 0 && dy == dy_opp && dz == 0) return true;
                     if (dist == 1) {
                         if (p == OU) return true;
                         if ((p == KIN || p == NARI_FU || p == NARI_KYO || p == NARI_KEI || p == NARI_GIN) && is_kin_dir(dx, dy, dz, dy_opp)) return true;
-                        if (p == FU && dx == 0 && dy == -dy_opp && dz == 0) return true;
+                        if (p == FU && dx == 0 && dy == dy_opp && dz == 0) return true;
                         if (p == GIN && is_gin_dir(dx, dy, dz, dy_opp)) return true;
                     }
                 }
@@ -289,7 +416,7 @@ king_found2:
     };
     for (int i = 0; i < 4; ++i) {
         int tx = kx + KEI_REL[i][0];
-        int ty = ky - 2 * dy_opp;
+        int ty = ky + 2 * dy_opp;
         int tz = kz + KEI_REL[i][2];
         if (!in_board(tx, ty, tz)) continue;
         if (o(tx, ty, tz) == opp && b(tx, ty, tz) == KEI) return true;
@@ -540,7 +667,7 @@ king_found3:
                             bool is_pinned = false;
                             if ((p == HI || p == RYU) && i < 6) is_pinned = true;
                             else if ((p == KAKU || p == UMA) && i >= 6) is_pinned = true;
-                            else if (p == KYO && dx == 0 && dy == -dy_opp && dz == 0) is_pinned = true;
+                            else if (p == KYO && dx == 0 && dy == dy_opp && dz == 0) is_pinned = true;
                             if (is_pinned) pinned[idx3(first_x, first_y, first_z)] = true;
                         }
                         break;
@@ -568,6 +695,9 @@ king_found3:
                 bool seen_dst[729];
                 for (int i = 0; i < 729; ++i) seen_dst[i] = false;
                 bool need_safety = true;
+                if (!currently_in_check && p != OU && !pinned[idx3(x, y, z)]) {
+                    need_safety = false;
+                }
                 for (auto mv : pm) {
                     int tx = mv[0], ty = mv[1], tz = mv[2];
                     int didx = idx3(tx, ty, tz);
@@ -659,4 +789,5 @@ PYBIND11_MODULE(shogi3d_core, m) {
     m.doc() = "3D shogi core helpers";
     m.def("is_king_in_check_ray_cpp", &is_king_in_check_ray_cpp, py::arg("board"), py::arg("owner"), py::arg("player"));
     m.def("generate_legal_moves_cpp", &generate_legal_moves_cpp, py::arg("board"), py::arg("owner"), py::arg("hand_counts"), py::arg("player"));
+    m.def("compute_pinned_pieces_cpp", &compute_pinned_pieces_cpp, py::arg("board"), py::arg("owner"), py::arg("player"), py::arg("currently_in_check"));
 }

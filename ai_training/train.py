@@ -4,7 +4,6 @@ import numpy as np
 import gymnasium as gym
 from gymnasium import spaces
 from sb3_contrib import MaskablePPO
-from sb3_contrib.common.maskable.buffers import MaskableRolloutBuffer, MaskableDictRolloutBuffer
 from sb3_contrib.common.maskable.callbacks import MaskableEvalCallback
 from stable_baselines3.common.callbacks import CheckpointCallback, BaseCallback
 from stable_baselines3.common.env_checker import check_env
@@ -19,6 +18,8 @@ from model import Shogi3DFeaturesExtractor
 import sys
 import time
 import math
+import json
+import random
 
 
 REASON_LABEL_JP = {
@@ -79,48 +80,6 @@ class ProgressMaskablePPO(MaskablePPO):
             sys.stdout.flush()
         return ret
 
-
-class BoolMaskableRolloutBuffer(MaskableRolloutBuffer):
-    """Store action masks as bool to reduce RAM usage."""
-
-    def reset(self) -> None:
-        if isinstance(self.action_space, spaces.Discrete):
-            mask_dims = int(self.action_space.n)
-        elif isinstance(self.action_space, spaces.MultiDiscrete):
-            mask_dims = sum(self.action_space.nvec)
-        elif isinstance(self.action_space, spaces.MultiBinary):
-            assert isinstance(self.action_space.n, int), (
-                f"Multi-dimensional MultiBinary({self.action_space.n}) action space is not supported. "
-                "You can flatten it instead."
-            )
-            mask_dims = 2 * self.action_space.n
-        else:
-            raise ValueError(f"Unsupported action space {type(self.action_space)}")
-        self.mask_dims = mask_dims
-        self.action_masks = np.ones((self.buffer_size, self.n_envs, self.mask_dims), dtype=bool)
-        super(MaskableRolloutBuffer, self).reset()
-
-
-class BoolMaskableDictRolloutBuffer(MaskableDictRolloutBuffer):
-    """Store action masks as bool to reduce RAM usage."""
-
-    def reset(self) -> None:
-        if isinstance(self.action_space, spaces.Discrete):
-            mask_dims = int(self.action_space.n)
-        elif isinstance(self.action_space, spaces.MultiDiscrete):
-            mask_dims = sum(self.action_space.nvec)
-        elif isinstance(self.action_space, spaces.MultiBinary):
-            assert isinstance(self.action_space.n, int), (
-                f"Multi-dimensional MultiBinary({self.action_space.n}) action space is not supported. "
-                "You can flatten it instead."
-            )
-            mask_dims = 2 * self.action_space.n
-        else:
-            raise ValueError(f"Unsupported action space {type(self.action_space)}")
-        self.mask_dims = mask_dims
-        self.action_masks = np.ones((self.buffer_size, self.n_envs, self.mask_dims), dtype=bool)
-        super(MaskableDictRolloutBuffer, self).reset()
-
 PIECE_LABEL_JP = {
     int(PieceType.FU): "歩",
     int(PieceType.KYO): "香",
@@ -165,8 +124,12 @@ class MatchCountCallback(BaseCallback):
         self.ou_capture_by_total = {}
         self.ou_capture_by_gen = {}
         self.last_live_print_ts = 0.0
-        self.last_periodic_log_ts = 0.0
-        self.periodic_log_interval_sec = float(os.getenv("SHOGI_COLAB_LOG_INTERVAL_SEC", "0"))
+        self.save_reason_replays = os.getenv("SHOGI_SAVE_REASON_REPLAYS", "1") == "1"
+        default_replay_dir = os.path.join(os.path.dirname(__file__), "replay_logs")
+        self.replay_dir = os.getenv("SHOGI_REPLAY_LOG_DIR", default_replay_dir)
+        self.replay_target_reasons = {"mate", "ou_capture", "timeout"}
+        self.replay_seen_counts = {k: 0 for k in self.replay_target_reasons}
+        self.replay_samples = {}
 
     def _on_training_start(self) -> None:
         # 既存チェックポイントを読み込んだ場合でも、FPSは「今回learnで進んだ分」だけで計算する
@@ -179,7 +142,91 @@ class MatchCountCallback(BaseCallback):
         self.gen_stats = {k: 0 for k in self.gen_stats.keys()}
         self.ou_capture_by_gen = {}
         self.last_live_print_ts = 0.0
-        self.last_periodic_log_ts = 0.0
+        self.replay_seen_counts = {k: 0 for k in self.replay_target_reasons}
+        self.replay_samples = {}
+
+    def _try_sample_replay(self, reason: str, info: dict):
+        if not self.save_reason_replays:
+            return
+        if reason not in self.replay_target_reasons:
+            return
+        if not isinstance(info, dict):
+            return
+        def _as_dict(v):
+            if isinstance(v, dict):
+                return v
+            if isinstance(v, (list, tuple)) and len(v) > 0 and isinstance(v[0], dict):
+                return v[0]
+            return None
+
+        game_record = info.get("game_record")
+        if not game_record:
+            terminal_info = _as_dict(info.get("terminal_info"))
+            if terminal_info is not None:
+                game_record = terminal_info.get("game_record")
+        if not game_record:
+            final_info = _as_dict(info.get("final_info"))
+            if final_info is not None:
+                game_record = final_info.get("game_record")
+        if not game_record:
+            return
+
+        self.replay_seen_counts[reason] += 1
+        seen = self.replay_seen_counts[reason]
+        # Reservoir sampling: 各理由カテゴリからランダムに1局だけ保持
+        if seen == 1 or random.random() < (1.0 / float(seen)):
+            winner = info.get("winner", 0)
+            if winner == 0:
+                terminal_info = _as_dict(info.get("terminal_info"))
+                if terminal_info is not None:
+                    winner = terminal_info.get("winner", 0)
+            if winner == 0:
+                final_info = _as_dict(info.get("final_info"))
+                if final_info is not None:
+                    winner = final_info.get("winner", 0)
+            self.replay_samples[reason] = {
+                "reason": reason,
+                "winner": int(winner) if winner is not None else 0,
+                "turn_count": int(len(game_record)),
+                "moves": game_record,
+            }
+
+    def save_generation_replays(self, generation: int):
+        if not self.save_reason_replays:
+            return []
+
+        os.makedirs(self.replay_dir, exist_ok=True)
+        saved = []
+        for reason in sorted(self.replay_target_reasons):
+            sample = self.replay_samples.get(reason)
+            if not sample:
+                continue
+            payload = {
+                "format": "3d_shogi_replay_v1",
+                "source": "train_generation",
+                "generation": int(generation),
+                "reason": str(sample["reason"]),
+                "winner": int(sample["winner"]),
+                "turn_count": int(sample["turn_count"]),
+                "moves": sample["moves"],
+            }
+            out_path = os.path.join(self.replay_dir, f"gen_{int(generation):05d}_{reason}.json")
+            with open(out_path, "w", encoding="utf-8") as f:
+                json.dump(payload, f, ensure_ascii=False, separators=(",", ":"))
+            size_bytes = int(os.path.getsize(out_path))
+            saved.append({
+                "reason": reason,
+                "path": out_path,
+                "size_bytes": size_bytes,
+            })
+        return saved
+
+    def replay_debug_summary(self):
+        seen = ", ".join(
+            f"{k}:{int(self.replay_seen_counts.get(k, 0))}" for k in sorted(self.replay_target_reasons)
+        )
+        sampled = ", ".join(sorted(self.replay_samples.keys())) if self.replay_samples else "none"
+        return f"seen=({seen}) sampled=({sampled})"
 
     def _record_ou_capture_by(self, piece_type_int):
         label = PIECE_LABEL_JP.get(int(piece_type_int), f"駒{int(piece_type_int)}")
@@ -211,15 +258,26 @@ class MatchCountCallback(BaseCallback):
 
                 reason = "unknown"
                 if isinstance(info, dict):
+                    def _as_dict(v):
+                        if isinstance(v, dict):
+                            return v
+                        if isinstance(v, (list, tuple)) and len(v) > 0 and isinstance(v[0], dict):
+                            return v[0]
+                        return None
+
                     reason = info.get("reason", reason)
-                    terminal_info = info.get("terminal_info")
-                    if reason == "unknown" and isinstance(terminal_info, dict):
+                    terminal_info = _as_dict(info.get("terminal_info"))
+                    final_info = _as_dict(info.get("final_info"))
+                    if reason == "unknown" and terminal_info is not None:
                         reason = terminal_info.get("reason", reason)
+                    if reason == "unknown" and final_info is not None:
+                        reason = final_info.get("reason", reason)
                     if reason == "unknown" and info.get("TimeLimit.truncated"):
                         reason = "timeout"
 
                 self.stats[reason] = self.stats.get(reason, 0) + 1
                 self.gen_stats[reason] = self.gen_stats.get(reason, 0) + 1
+                self._try_sample_replay(reason, info if isinstance(info, dict) else {})
 
                 if reason == "ou_capture":
                     capture_piece = None
@@ -254,19 +312,6 @@ class MatchCountCallback(BaseCallback):
             )
             sys.stdout.flush()
             self.last_live_print_ts = now
-
-        # Colab では \r 上書き行が見えにくいことがあるため、一定間隔で改行ログも出す。
-        if self.periodic_log_interval_sec > 0 and (now - self.last_periodic_log_ts) >= self.periodic_log_interval_sec:
-            current_turn = int(np.max(self.env_steps)) if self.env_steps is not None and len(self.env_steps) > 0 else 0
-            elapsed = now - self.start_time
-            steps_this_session = max(int(self.num_timesteps) - self.base_timesteps, 0)
-            tps_total = steps_this_session / max(elapsed, 1e-6)
-            n_envs = max(int(self.training_env.num_envs), 1)
-            tps_per_env = tps_total / n_envs
-            print(
-                f"\n  [進行ログ] 現在対局手数: {current_turn:4d} | 手数/s(合計): {tps_total:6.2f} | 1環境換算: {tps_per_env:6.2f}"
-            )
-            self.last_periodic_log_ts = now
 
         return True
 
@@ -317,6 +362,7 @@ def safe_model_save(model, target_path, retries=2):
 
 
 def train():
+    print("[TRAIN] script version: replay-save-v3", flush=True)
     # 1. 環境の並列生成
     cpu_count = os.cpu_count() or 2
     default_envs = max(1, min(8, cpu_count // 2))
@@ -330,7 +376,8 @@ def train():
     print(f"Creating {n_envs} parallel environments...")
     print(f"Requested rollout settings: n_steps={n_steps}, n_envs={n_envs}, n_epochs={n_epochs}")
     env_kwargs = {"opening_random_plies": opening_random_plies}
-    if n_envs > 1:
+    force_dummyvec = os.getenv("SHOGI_FORCE_DUMMYVEC", "0") == "1"
+    if n_envs > 1 and not force_dummyvec:
         env = make_vec_env(
             Shogi3DEnv,
             n_envs=n_envs,
@@ -339,14 +386,19 @@ def train():
             vec_env_kwargs={"start_method": "spawn"}
         )
     else:
-        env = make_vec_env(Shogi3DEnv, n_envs=1, env_kwargs=env_kwargs, vec_env_cls=DummyVecEnv)
+        if n_envs > 1 and force_dummyvec:
+            print("[WARN] SHOGI_FORCE_DUMMYVEC=1: using DummyVecEnv to avoid Subproc spawn.")
+        env = make_vec_env(Shogi3DEnv, n_envs=n_envs, env_kwargs=env_kwargs, vec_env_cls=DummyVecEnv)
 
-    # MaskablePPO の action mask バッファは (n_steps, n_envs, action_n) を確保する。
-    # 本実装では bool バッファ（1 byte）を使い、メモリ削減する。
+    # MaskablePPO の action mask バッファ想定サイズを使って n_steps を安全側へ調整する。
+    # 既定は 1 byte/要素想定（過去運用値）。必要なら SHOGI_MASK_ITEM_BYTES で上書き可能。
     action_n = int(getattr(env.action_space, "n", 0))
     mask_item_bytes = int(os.getenv("SHOGI_MASK_ITEM_BYTES", "1"))
+    if mask_item_bytes <= 0:
+        mask_item_bytes = 1
+    bytes_per_step = 0
     if action_n > 0:
-        bytes_per_step = int(n_envs) * int(action_n) * max(mask_item_bytes, 1)
+        bytes_per_step = int(n_envs) * int(action_n) * int(mask_item_bytes)
         requested_mask_gb = (bytes_per_step * int(n_steps)) / (1024 ** 3)
         budget_bytes = int(max(max_mask_gb, 0.25) * (1024 ** 3))
         if bytes_per_step > 0 and requested_mask_gb > max_mask_gb:
@@ -357,7 +409,22 @@ def train():
                 f"Auto-adjust n_steps: {n_steps} -> {safe_n_steps}."
             )
             n_steps = int(safe_n_steps)
-    print(f"Applied rollout settings: n_steps={n_steps}, n_envs={n_envs}, action_n={action_n}, mask_item_bytes={mask_item_bytes}, mask_budget_gb={max_mask_gb}")
+    obs_bytes_per_step = 0
+    obs_space = getattr(env, "observation_space", None)
+    if hasattr(obs_space, "spaces"):
+        for space in obs_space.spaces.values():
+            shape = getattr(space, "shape", None)
+            if shape is None:
+                continue
+            dtype = np.dtype(getattr(space, "dtype", np.float32))
+            obs_bytes_per_step += int(np.prod(shape)) * int(dtype.itemsize) * int(n_envs)
+    obs_rollout_gb = (obs_bytes_per_step * int(n_steps)) / (1024 ** 3) if obs_bytes_per_step > 0 else 0.0
+    mask_rollout_gb = (bytes_per_step * int(n_steps)) / (1024 ** 3) if bytes_per_step > 0 else 0.0
+    print(
+        f"Applied rollout settings: n_steps={n_steps}, n_envs={n_envs}, action_n={action_n}, "
+        f"mask_item_bytes={mask_item_bytes}, mask_budget_gb={max_mask_gb}"
+    )
+    print(f"Estimated rollout memory: obs={obs_rollout_gb:.2f} GiB, mask={mask_rollout_gb:.2f} GiB")
     
     # 2. パス設定
     model_dir = os.getenv("SHOGI_MODEL_DIR", "./models/")
@@ -402,8 +469,6 @@ def train():
         net_arch=dict(pi=[256, 128], vf=[256, 128])
     )
 
-    rollout_buffer_class = BoolMaskableDictRolloutBuffer if isinstance(env.observation_space, spaces.Dict) else BoolMaskableRolloutBuffer
-
     # ロードするモデルの探索
     load_path = None
     if os.path.exists(model_dir):
@@ -432,12 +497,7 @@ def train():
     if load_path:
         try:
             print(f"Loading existing model from {load_path}...")
-            loaded_model = ProgressMaskablePPO.load(
-                load_path,
-                env=env,
-                device=device,
-                custom_objects={"rollout_buffer_class": rollout_buffer_class},
-            )
+            loaded_model = ProgressMaskablePPO.load(load_path, env=env, device=device)
             loaded_n_steps = int(getattr(loaded_model, "n_steps", n_steps))
             loaded_batch_size = int(getattr(loaded_model, "batch_size", batch_size))
             loaded_n_envs = int(getattr(loaded_model, "n_envs", env.num_envs))
@@ -459,7 +519,6 @@ def train():
                     "MultiInputPolicy",
                     env,
                     policy_kwargs=policy_kwargs,
-                    rollout_buffer_class=rollout_buffer_class,
                     verbose=1,
                     tensorboard_log=log_dir,
                     device=device,
@@ -481,7 +540,6 @@ def train():
                 "MultiInputPolicy",
                 env,
                 policy_kwargs=policy_kwargs,
-                rollout_buffer_class=rollout_buffer_class,
                 verbose=1,
                 tensorboard_log=log_dir,
                 device=device,
@@ -497,7 +555,6 @@ def train():
             "MultiInputPolicy",
             env,
             policy_kwargs=policy_kwargs,
-            rollout_buffer_class=rollout_buffer_class,
             verbose=1,
             tensorboard_log=log_dir,
             device=device,
@@ -527,6 +584,11 @@ def train():
         name_prefix="shogi3d_checkpoint"
     )
     match_count_callback = MatchCountCallback()
+    print(
+        f"Replay save enabled: {match_count_callback.save_reason_replays} | "
+        f"dir: {match_count_callback.replay_dir} | "
+        f"target reasons: {','.join(sorted(match_count_callback.replay_target_reasons))}"
+    )
 
     # 5. 学習開始 (世代ループ)
     print("\nBeginning PPO Self-Play Training (Ctrl+C to stop and save)...")
@@ -576,6 +638,22 @@ def train():
                 f"手数/s(合計): {fps:.2f} | 1環境換算: {tps_per_env:.2f} | "
                 f"収集時間: {collect_elapsed:.2f}s | 学習時間: {update_elapsed:.2f}s"
             )
+
+            replay_saved = match_count_callback.save_generation_replays(generation)
+            if replay_saved:
+                size_summary = ", ".join(
+                    f"{r['reason']}={r['size_bytes'] / 1024.0:.1f}KB" for r in replay_saved
+                )
+                total_kb = sum(int(r["size_bytes"]) for r in replay_saved) / 1024.0
+                print(
+                    f"[世代 {generation}] リプレイ保存: {size_summary} | 合計={total_kb:.1f}KB | "
+                    f"{match_count_callback.replay_debug_summary()}"
+                )
+            else:
+                print(
+                    f"[世代 {generation}] リプレイ保存: 対象理由の終局なし | "
+                    f"{match_count_callback.replay_debug_summary()}"
+                )
             
             safe_model_save(model, latest_model_path)
 

@@ -669,10 +669,14 @@ export class View3D {
   }
 
   _clearHighlights() {
+    const stale = new Set(this.highlightMeshes);
     for (const m of this.highlightMeshes) {
       this.scene.remove(m);
       this.clickMap.delete(m.uuid);
     }
+    // Remove stale highlight meshes from raycast targets; otherwise clicks can hit removed objects.
+    this.clickTargets = this.clickTargets.filter((obj) => !stale.has(obj));
+    if (this._hoveredMarker && stale.has(this._hoveredMarker)) this._hoveredMarker = null;
     this.highlightMeshes = [];
   }
 
