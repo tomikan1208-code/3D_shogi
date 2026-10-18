@@ -26,10 +26,14 @@ def is_king_in_check_ray(board, owner, player):
     return bool(_cpp.is_king_in_check_ray_cpp(board, owner, int(player)))
 
 
-def generate_legal_moves(board, owner, hand_counts, player):
+def generate_legal_moves(board, owner, hand_counts, player, king_pos=None):
     if _cpp is None:
         return None
-    arr = _cpp.generate_legal_moves_cpp(board, owner, hand_counts, int(player))
+    if king_pos is not None:
+        kx, ky, kz = (int(king_pos[0]), int(king_pos[1]), int(king_pos[2]))
+        arr = _cpp.generate_legal_moves_cpp(board, owner, hand_counts, int(player), kx, ky, kz)
+    else:
+        arr = _cpp.generate_legal_moves_cpp(board, owner, hand_counts, int(player))
     return arr.tolist()
 
 

@@ -156,10 +156,10 @@ def _zobrist_value(ptype, owner, x, y, z):
 class Shogi3DEnv(gym.Env):
     def __init__(self, opening_random_plies=0):
         super(Shogi3DEnv, self).__init__()
-        self.use_cpp_kingcheck = bool(int(os.getenv("SHOGI_USE_CPP_KINGCHECK", "0")))
-        self.use_cpp_legal_moves = bool(int(os.getenv("SHOGI_USE_CPP_LEGAL_MOVES", "0")))
+        self.use_cpp_kingcheck = bool(int(os.getenv("SHOGI_USE_CPP_KINGCHECK", "1")))
+        self.use_cpp_legal_moves = bool(int(os.getenv("SHOGI_USE_CPP_LEGAL_MOVES", "1")))
         self.use_cpp_pinned = bool(int(os.getenv("SHOGI_USE_CPP_PINNED", "1")))
-        self.cpp_filter_level = int(os.getenv("SHOGI_CPP_FILTER_LEVEL", "0"))
+        self.cpp_filter_level = int(os.getenv("SHOGI_CPP_FILTER_LEVEL", "2"))
         self.use_legal_moves_cache = bool(int(os.getenv("SHOGI_USE_LEGAL_MOVES_CACHE", "1")))
         self.cpp_strict_filter = bool(int(os.getenv("SHOGI_CPP_STRICT_FILTER", "0")))
         self.deterministic_move_order = bool(int(os.getenv("SHOGI_DETERMINISTIC_MOVE_ORDER", "0")))
@@ -751,7 +751,13 @@ class Shogi3DEnv(gym.Env):
 
         if self.use_cpp_legal_moves and cpp_kingcheck is not None and cpp_kingcheck.cpp_available():
             hm = self._hand_counts_vec(player)
-            cpp_moves = cpp_kingcheck.generate_legal_moves(self.board, self.owner, hm, int(player))
+            cpp_moves = cpp_kingcheck.generate_legal_moves(
+                self.board,
+                self.owner,
+                hm,
+                int(player),
+                king_pos=self.king_positions.get(player),
+            )
             if cpp_moves is not None:
                 # C++ legal-move outputをどこまでPython側で再検証するかを段階化する。
                 # level 0: 既存挙動(安全性重視)

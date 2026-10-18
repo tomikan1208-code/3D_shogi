@@ -72,7 +72,7 @@ def main() -> None:
         set_default_env("SHOGI_USE_CPP_KINGCHECK", "1")
         set_default_env("SHOGI_USE_CPP_LEGAL_MOVES", "1")
         set_default_env("SHOGI_USE_CPP_PINNED", "1")
-        set_default_env("SHOGI_CPP_FILTER_LEVEL", "1")
+        set_default_env("SHOGI_CPP_FILTER_LEVEL", "2")
     else:
         set_default_env("SHOGI_USE_CPP_KINGCHECK", "0")
         set_default_env("SHOGI_USE_CPP_LEGAL_MOVES", "0")

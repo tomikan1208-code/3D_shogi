@@ -391,11 +391,12 @@ def train():
         env = make_vec_env(Shogi3DEnv, n_envs=n_envs, env_kwargs=env_kwargs, vec_env_cls=DummyVecEnv)
 
     # MaskablePPO の action mask バッファ想定サイズを使って n_steps を安全側へ調整する。
-    # 既定は 1 byte/要素想定（過去運用値）。必要なら SHOGI_MASK_ITEM_BYTES で上書き可能。
+    # この環境では sb3_contrib をパッチし、action_masks を uint8 で確保する。
+    # 既定は 1bit/要素（bit-pack時は1/8=0.125byte）。必要なら SHOGI_MASK_ITEM_BYTES で上書き可能。
     action_n = int(getattr(env.action_space, "n", 0))
-    mask_item_bytes = int(os.getenv("SHOGI_MASK_ITEM_BYTES", "1"))
+    mask_item_bytes = float(os.getenv("SHOGI_MASK_ITEM_BYTES", "0.125"))
     if mask_item_bytes <= 0:
-        mask_item_bytes = 1
+        mask_item_bytes = 0.125
     bytes_per_step = 0
     if action_n > 0:
         bytes_per_step = int(n_envs) * int(action_n) * int(mask_item_bytes)

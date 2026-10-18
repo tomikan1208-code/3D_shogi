@@ -299,7 +299,7 @@ king_found_pin:
 }
 
 template <typename BO, typename OO>
-bool is_king_in_check_ray_view(BO &b, OO &o, int player) {
+bool is_king_in_check_ray_view_at(BO &b, OO &o, int player, int kx, int ky, int kz) {
     const int NONE = 0;
     const int SENTE = 1;
     const int GOTE = 2;
@@ -319,20 +319,6 @@ bool is_king_in_check_ray_view(BO &b, OO &o, int player) {
     const int UMA = 13;
     const int RYU = 14;
 
-    int kx = -1, ky = -1, kz = -1;
-    for (int x = 0; x < 9; ++x) {
-        for (int y = 0; y < 9; ++y) {
-            for (int z = 0; z < 9; ++z) {
-                if (o(x, y, z) == player && b(x, y, z) == OU) {
-                    kx = x;
-                    ky = y;
-                    kz = z;
-                    goto king_found2;
-                }
-            }
-        }
-    }
-king_found2:
     if (kx < 0) return true;
 
     const int opp = (player == SENTE) ? GOTE : SENTE;
@@ -440,11 +426,34 @@ king_found2:
     return false;
 }
 
+template <typename BO, typename OO>
+bool is_king_in_check_ray_view(BO &b, OO &o, int player) {
+    const int OU = 8;
+    int kx = -1, ky = -1, kz = -1;
+    for (int x = 0; x < 9; ++x) {
+        for (int y = 0; y < 9; ++y) {
+            for (int z = 0; z < 9; ++z) {
+                if (o(x, y, z) == player && b(x, y, z) == OU) {
+                    kx = x;
+                    ky = y;
+                    kz = z;
+                    goto king_found2;
+                }
+            }
+        }
+    }
+king_found2:
+    return is_king_in_check_ray_view_at(b, o, player, kx, ky, kz);
+}
+
 py::array_t<int> generate_legal_moves_cpp(
     py::array_t<int, py::array::c_style | py::array::forcecast> board,
     py::array_t<signed char, py::array::c_style | py::array::forcecast> owner,
     py::array_t<short, py::array::c_style | py::array::forcecast> hand_counts,
-    int player) {
+    int player,
+    int king_x = -1,
+    int king_y = -1,
+    int king_z = -1) {
 
     auto b = board.mutable_unchecked<3>();
     auto o = owner.mutable_unchecked<3>();
@@ -477,10 +486,29 @@ py::array_t<int> generate_legal_moves_cpp(
         {1, 0, 1}, {1, 0, -1}, {-1, 0, 1}, {-1, 0, -1},
         {0, 1, 1}, {0, 1, -1}, {0, -1, 1}, {0, -1, -1}
     };
+    static const int KIN_REL_BASE[18][3] = {
+        {-1, 1, -1}, {-1, 1, 0}, {-1, 1, 1},
+        {0, 1, -1}, {0, 1, 0}, {0, 1, 1},
+        {1, 1, -1}, {1, 1, 0}, {1, 1, 1},
+        {-1, 0, -1}, {-1, 0, 0}, {-1, 0, 1},
+        {0, 0, -1}, {0, 0, 1},
+        {1, 0, -1}, {1, 0, 0}, {1, 0, 1},
+        {0, -1, 0}
+    };
+    static const int GIN_REL_BASE[17][3] = {
+        {-1, 1, -1}, {-1, 1, 0}, {-1, 1, 1},
+        {0, 1, -1}, {0, 1, 0}, {0, 1, 1},
+        {1, 1, -1}, {1, 1, 0}, {1, 1, 1},
+        {-1, -1, -1}, {-1, -1, 0}, {-1, -1, 1},
+        {0, -1, -1}, {0, -1, 1},
+        {1, -1, -1}, {1, -1, 0}, {1, -1, 1}
+    };
+    static const int FU_REL_BASE[1][3] = {{0, 1, 0}};
+    static const int KEI_REL_BASE[4][3] = {{1, 2, 0}, {-1, 2, 0}, {0, 2, 1}, {0, 2, -1}};
 
-    auto add_step_moves = [&](int fx, int fy, int fz, const std::vector<std::array<int, 3>> &rels, std::vector<std::array<int, 3>> &out) {
-        for (auto r : rels) {
-            int tx = fx + r[0], ty = fy + r[1], tz = fz + r[2];
+    auto add_step_moves_scaled = [&](int fx, int fy, int fz, const int rels[][3], int nd, int dy_sign, std::vector<std::array<int, 3>> &out) {
+        for (int i = 0; i < nd; ++i) {
+            int tx = fx + rels[i][0], ty = fy + rels[i][1] * dy_sign, tz = fz + rels[i][2];
             if (!in_board(tx, ty, tz)) continue;
             if (o(tx, ty, tz) != player) out.push_back({tx, ty, tz});
         }
@@ -504,21 +532,6 @@ py::array_t<int> generate_legal_moves_cpp(
         }
     };
 
-    auto make_kin = [&](int dy) {
-        std::vector<std::array<int, 3>> rel;
-        for (int dx = -1; dx <= 1; ++dx) for (int dz = -1; dz <= 1; ++dz) rel.push_back({dx, dy, dz});
-        for (int dx = -1; dx <= 1; ++dx) for (int dz = -1; dz <= 1; ++dz) if (!(dx == 0 && dz == 0)) rel.push_back({dx, 0, dz});
-        rel.push_back({0, -dy, 0});
-        return rel;
-    };
-
-    auto make_gin = [&](int dy) {
-        std::vector<std::array<int, 3>> rel;
-        for (int dx = -1; dx <= 1; ++dx) for (int dz = -1; dz <= 1; ++dz) rel.push_back({dx, dy, dz});
-        for (int dx = -1; dx <= 1; ++dx) for (int dz = -1; dz <= 1; ++dz) if (!(dx == 0 && dz == 0)) rel.push_back({dx, -dy, dz});
-        return rel;
-    };
-
     auto piece_moves = [&](int fx, int fy, int fz, std::vector<std::array<int, 3>> &out) {
         int p = b(fx, fy, fz);
         int dy = (player == SENTE) ? -1 : 1;
@@ -532,21 +545,19 @@ py::array_t<int> generate_legal_moves_cpp(
             return;
         }
         if (p == KIN || p == NARI_FU || p == NARI_KYO || p == NARI_KEI || p == NARI_GIN) {
-            auto rel = make_kin(dy);
-            add_step_moves(fx, fy, fz, rel, out);
+            add_step_moves_scaled(fx, fy, fz, KIN_REL_BASE, 18, dy, out);
             return;
         }
         if (p == GIN) {
-            auto rel = make_gin(dy);
-            add_step_moves(fx, fy, fz, rel, out);
+            add_step_moves_scaled(fx, fy, fz, GIN_REL_BASE, 17, dy, out);
             return;
         }
         if (p == FU) {
-            add_step_moves(fx, fy, fz, {{0, dy, 0}}, out);
+            add_step_moves_scaled(fx, fy, fz, FU_REL_BASE, 1, dy, out);
             return;
         }
         if (p == KEI) {
-            add_step_moves(fx, fy, fz, {{1, 2 * dy, 0}, {-1, 2 * dy, 0}, {0, 2 * dy, 1}, {0, 2 * dy, -1}}, out);
+            add_step_moves_scaled(fx, fy, fz, KEI_REL_BASE, 4, dy, out);
             return;
         }
         if (p == KYO) {
@@ -584,6 +595,27 @@ py::array_t<int> generate_legal_moves_cpp(
         }
     };
 
+    if (king_x < 0 || king_y < 0 || king_z < 0 || !in_board(king_x, king_y, king_z) || o(king_x, king_y, king_z) != player || b(king_x, king_y, king_z) != OU) {
+        king_x = -1;
+        king_y = -1;
+        king_z = -1;
+        for (int x = 0; x < 9; ++x) {
+            for (int y = 0; y < 9; ++y) {
+                for (int z = 0; z < 9; ++z) {
+                    if (o(x, y, z) == player && b(x, y, z) == OU) {
+                        king_x = x;
+                        king_y = y;
+                        king_z = z;
+                        goto king_found3;
+                    }
+                }
+            }
+        }
+    }
+king_found3:
+
+    bool currently_in_check = is_king_in_check_ray_view_at(b, o, player, king_x, king_y, king_z);
+
     auto is_move_safe = [&](int fx, int fy, int fz, int tx, int ty, int tz) {
         int sb = b(fx, fy, fz);
         int so = o(fx, fy, fz);
@@ -595,7 +627,16 @@ py::array_t<int> generate_legal_moves_cpp(
         b(fx, fy, fz) = 0;
         o(fx, fy, fz) = 0;
 
-        bool safe = !is_king_in_check_ray_view(b, o, player);
+        int kx2 = king_x;
+        int ky2 = king_y;
+        int kz2 = king_z;
+        if (fx == king_x && fy == king_y && fz == king_z) {
+            kx2 = tx;
+            ky2 = ty;
+            kz2 = tz;
+        }
+
+        bool safe = !is_king_in_check_ray_view_at(b, o, player, kx2, ky2, kz2);
 
         b(fx, fy, fz) = sb;
         o(fx, fy, fz) = so;
@@ -609,32 +650,15 @@ py::array_t<int> generate_legal_moves_cpp(
         int co = o(tx, ty, tz);
         b(tx, ty, tz) = ptype;
         o(tx, ty, tz) = player;
-        bool safe = !is_king_in_check_ray_view(b, o, player);
+        bool safe = !is_king_in_check_ray_view_at(b, o, player, king_x, king_y, king_z);
         b(tx, ty, tz) = cb;
         o(tx, ty, tz) = co;
         return safe;
     };
 
-    bool currently_in_check = is_king_in_check_ray_view(b, o, player);
-
     // Python版と同様にピン駒を推定（王手中でない場合のみ利用）
     bool pinned[729];
     for (int i = 0; i < 729; ++i) pinned[i] = false;
-
-    int king_x = -1, king_y = -1, king_z = -1;
-    for (int x = 0; x < 9; ++x) {
-        for (int y = 0; y < 9; ++y) {
-            for (int z = 0; z < 9; ++z) {
-                if (o(x, y, z) == player && b(x, y, z) == OU) {
-                    king_x = x;
-                    king_y = y;
-                    king_z = z;
-                    goto king_found3;
-                }
-            }
-        }
-    }
-king_found3:
 
     if (!currently_in_check && king_x >= 0) {
         int opp = (player == SENTE) ? GOTE : SENTE;
@@ -682,6 +706,11 @@ king_found3:
 
     std::vector<int> flat;
     flat.reserve(50000);
+    std::vector<std::array<int, 3>> pm;
+    pm.reserve(64);
+    int seen_dst_stamp[729];
+    for (int i = 0; i < 729; ++i) seen_dst_stamp[i] = 0;
+    int seen_epoch = 1;
 
     // Board moves
     for (int x = 0; x < 9; ++x) {
@@ -689,11 +718,13 @@ king_found3:
             for (int z = 0; z < 9; ++z) {
                 if (o(x, y, z) != player) continue;
                 int p = b(x, y, z);
-                std::vector<std::array<int, 3>> pm;
-                pm.reserve(64);
+                pm.clear();
                 piece_moves(x, y, z, pm);
-                bool seen_dst[729];
-                for (int i = 0; i < 729; ++i) seen_dst[i] = false;
+                if (seen_epoch == 0x7fffffff) {
+                    for (int i = 0; i < 729; ++i) seen_dst_stamp[i] = 0;
+                    seen_epoch = 1;
+                }
+                int epoch = seen_epoch++;
                 bool need_safety = true;
                 if (!currently_in_check && p != OU && !pinned[idx3(x, y, z)]) {
                     need_safety = false;
@@ -701,8 +732,8 @@ king_found3:
                 for (auto mv : pm) {
                     int tx = mv[0], ty = mv[1], tz = mv[2];
                     int didx = idx3(tx, ty, tz);
-                    if (seen_dst[didx]) continue;
-                    seen_dst[didx] = true;
+                    if (seen_dst_stamp[didx] == epoch) continue;
+                    seen_dst_stamp[didx] = epoch;
                     if (need_safety && !is_move_safe(x, y, z, tx, ty, tz)) continue;
                     flat.push_back(x);
                     flat.push_back(y);
@@ -788,6 +819,15 @@ king_found3:
 PYBIND11_MODULE(shogi3d_core, m) {
     m.doc() = "3D shogi core helpers";
     m.def("is_king_in_check_ray_cpp", &is_king_in_check_ray_cpp, py::arg("board"), py::arg("owner"), py::arg("player"));
-    m.def("generate_legal_moves_cpp", &generate_legal_moves_cpp, py::arg("board"), py::arg("owner"), py::arg("hand_counts"), py::arg("player"));
+    m.def(
+        "generate_legal_moves_cpp",
+        &generate_legal_moves_cpp,
+        py::arg("board"),
+        py::arg("owner"),
+        py::arg("hand_counts"),
+        py::arg("player"),
+        py::arg("king_x") = -1,
+        py::arg("king_y") = -1,
+        py::arg("king_z") = -1);
     m.def("compute_pinned_pieces_cpp", &compute_pinned_pieces_cpp, py::arg("board"), py::arg("owner"), py::arg("player"), py::arg("currently_in_check"));
 }
